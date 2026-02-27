@@ -1,0 +1,16 @@
+# Binary
+whitenoise-caster
+
+# Audio files
+*.mp3
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Environment
+.env

@@ -1,0 +1,53 @@
+# Whitenoise Caster
+
+A Go service that plays looped white noise on Chromecast/Google Home speakers, controlled via a mobile-first web UI.
+
+## Architecture
+
+- **Go backend** wrapping [go-chromecast](https://github.com/vishen/go-chromecast) for cast control
+- **Embedded web UI** — dark-theme PWA with a giant play/pause button
+- **Audio served via HTTPS** so the Chromecast fetches it directly over the internet
+- **WireGuard tunnel** connects the VPS to the local network where the Chromecast lives
+
+## Quick Start
+
+```bash
+# Place your white noise MP3 in the project root
+cp /path/to/whitenoise.mp3 .
+
+# Edit config.yaml with your speaker IPs and public URL
+vim config.yaml
+
+# Run
+go run . -config config.yaml
+```
+
+Open `http://localhost:8080`, select a speaker, and press play.
+
+## Configuration
+
+See `config.yaml` for all options:
+
+- **speakers** — list of Chromecast devices (name + IP)
+- **audio_file** — path to the MP3 file
+- **audio_url** — public base URL the Chromecast will use to fetch audio
+- **listen_addr** — HTTP listen address (default `:8080`)
+- **auth** — optional basic auth for the web UI
+- **secret_path** — secret URL segment for the audio endpoint (auto-generated if empty)
+
+## Deployment
+
+```bash
+# Build and run with Docker + Caddy
+make docker-up
+```
+
+Edit `Caddyfile` with your domain. Caddy handles automatic HTTPS.
+
+## How It Works
+
+1. User selects a speaker and presses play in the web UI
+2. Server connects to the Chromecast over the WireGuard tunnel
+3. Server tells the Chromecast to load the audio URL (public HTTPS)
+4. A monitor goroutine polls every 3s and re-loads the audio when it finishes (looping)
+5. On persistent errors, it performs a full reconnect
