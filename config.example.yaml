@@ -1,0 +1,25 @@
+# Whitenoise Caster Configuration
+
+speakers:
+  - name: "Living Room"
+    ip: "192.168.1.100"
+  - name: "Bedroom"
+    ip: "192.168.1.101"
+
+# Path to the white noise MP3 file served by this application
+audio_file: "whitenoise.mp3"
+
+# Public base URL where the Chromecast can reach this server
+# The Chromecast will fetch: {audio_url}/audio/{secret_path}/whitenoise.mp3
+audio_url: "https://noise.example.com"
+
+# Address to listen on
+listen_addr: ":8080"
+
+# Optional basic auth for the web UI (leave empty to disable)
+auth:
+  username: ""
+  password: ""
+
+# Secret path segment for the audio URL (auto-generated if empty)
+secret_path: ""
