@@ -2,16 +2,16 @@
 
 speakers:
   - name: "Living Room"
-    ip: "192.168.1.100"
+    ip: "192.168.0.64"
   - name: "Bedroom"
-    ip: "192.168.1.101"
+    ip: "192.168.0.151"
 
 # Path to the white noise MP3 file served by this application
 audio_file: "whitenoise.mp3"
 
 # Public base URL where the Chromecast can reach this server
 # The Chromecast will fetch: {audio_url}/audio/{secret_path}/whitenoise.mp3
-audio_url: "https://noise.example.com"
+audio_url: "http://192.168.0.4:8080"
 
 # Address to listen on
 listen_addr: ":8080"

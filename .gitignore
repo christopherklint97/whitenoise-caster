@@ -1,5 +1,6 @@
 # Binary
 whitenoise-caster
+tmp/
 
 # Audio files
 *.mp3

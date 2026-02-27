@@ -24,6 +24,21 @@ go run . -config config.yaml
 
 Open `http://localhost:8080`, select a speaker, and press play.
 
+## Development
+
+```bash
+# Run tests
+make test
+
+# Lint
+make vet
+
+# Hot-reload (requires air)
+make dev
+```
+
+CI runs `go vet` and `make test` on every push/PR to `main` via GitHub Actions.
+
 ## Configuration
 
 See `config.yaml` for all options:

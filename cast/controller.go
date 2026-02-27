@@ -45,6 +45,8 @@ func NewController(logger *slog.Logger, audioURL string) *Controller {
 	}
 }
 
+const connectTimeout = 10 * time.Second
+
 func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -58,12 +60,8 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 		SpeakerName: speakerName,
 	}
 
-	app := application.NewApplication(
-		application.WithDebug(false),
-		application.WithCacheDisabled(true),
-	)
-
-	if err := app.Start(speakerIP, 8009); err != nil {
+	app, err := connectWithTimeout(speakerIP, 8009, connectTimeout)
+	if err != nil {
 		c.status = Status{State: StateError, Error: fmt.Sprintf("connect: %v", err)}
 		return fmt.Errorf("connecting to %s (%s): %w", speakerName, speakerIP, err)
 	}
@@ -83,12 +81,47 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 		SpeakerName: speakerName,
 	}
 
-	loopCtx, cancel := context.WithCancel(ctx)
+	// Use background context so the monitor loop outlives the HTTP request.
+	loopCtx, cancel := context.WithCancel(context.Background())
 	c.cancelLoop = cancel
 	go c.monitorLoop(loopCtx, speakerIP, speakerName)
 
 	c.log.Info("playback started", "speaker", speakerName, "ip", speakerIP)
 	return nil
+}
+
+// connectWithTimeout attempts app.Start in a goroutine and returns after timeout.
+// If the goroutine eventually connects after the timeout, it closes the connection.
+func connectWithTimeout(ip string, port int, timeout time.Duration) (*application.Application, error) {
+	type result struct {
+		app *application.Application
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		a := application.NewApplication(
+			application.WithDebug(false),
+			application.WithCacheDisabled(true),
+		)
+		err := a.Start(ip, port)
+		ch <- result{a, err}
+	}()
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.app, nil
+	case <-time.After(timeout):
+		// Goroutine may still be running; close its app if it eventually connects.
+		go func() {
+			if res := <-ch; res.err == nil {
+				_ = res.app.Close(false)
+			}
+		}()
+		return nil, fmt.Errorf("connection timed out after %v", timeout)
+	}
 }
 
 func (c *Controller) Pause() error {
@@ -101,15 +134,21 @@ func (c *Controller) Pause() error {
 
 	switch c.status.State {
 	case StatePlaying:
-		if err := c.app.Pause(); err != nil {
-			return fmt.Errorf("pausing: %w", err)
+		// Stop media (not Cast pause) so position doesn't matter on resume.
+		c.log.Info("pausing: stopping media on speaker", "speaker", c.status.SpeakerName)
+		if err := c.app.StopMedia(); err != nil {
+			return fmt.Errorf("stopping media: %w", err)
 		}
 		c.status.State = StatePaused
+		c.log.Info("paused")
 	case StatePaused:
-		if err := c.app.Unpause(); err != nil {
-			return fmt.Errorf("unpausing: %w", err)
+		// Always restart from the beginning.
+		c.log.Info("resuming: loading media from start", "speaker", c.status.SpeakerName)
+		if err := c.loadMedia(); err != nil {
+			return fmt.Errorf("resuming: %w", err)
 		}
 		c.status.State = StatePlaying
+		c.log.Info("resumed")
 	default:
 		return fmt.Errorf("cannot toggle pause in state: %s", c.status.State)
 	}
@@ -179,6 +218,12 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 
 			castApp, castMedia, _ := c.app.Status()
 
+			if c.status.State == StatePaused {
+				// Intentionally stopped — don't touch media.
+				c.mu.Unlock()
+				continue
+			}
+
 			// Check if media has finished (need to re-load for looping)
 			if castMedia == nil || castMedia.PlayerState == "IDLE" {
 				// Media finished or was never started — re-load for looping
@@ -229,12 +274,8 @@ func (c *Controller) reconnectLocked(ctx context.Context, speakerIP, speakerName
 
 	c.log.Info("reconnecting", "speaker", speakerName, "ip", speakerIP)
 
-	app := application.NewApplication(
-		application.WithDebug(false),
-		application.WithCacheDisabled(true),
-	)
-
-	if err := app.Start(speakerIP, 8009); err != nil {
+	app, err := connectWithTimeout(speakerIP, 8009, connectTimeout)
+	if err != nil {
 		c.log.Error("reconnect failed", "error", err)
 		c.status = Status{
 			State:       StateError,

@@ -46,7 +46,6 @@ func main() {
 	}
 
 	controller := cast.NewController(logger, cfg.FullAudioURL())
-	defer controller.Close()
 
 	h := handlers.New(cfg, controller, logger, webFS)
 	mux := http.NewServeMux()
@@ -60,7 +59,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -73,7 +71,12 @@ func main() {
 	}()
 
 	<-ctx.Done()
+	stop() // deregister signal handler immediately
 	logger.Info("shutting down...")
+
+	// Close the Chromecast connection first — this causes the speaker to drop
+	// its audio streaming connection, allowing the HTTP server to drain cleanly.
+	controller.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

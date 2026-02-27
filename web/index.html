@@ -107,10 +107,9 @@ async function pollStatus() {
 btn.addEventListener('click', async () => {
   if (currentState === 'connecting') return;
 
-  if (currentState === 'playing' || currentState === 'paused') {
-    // Long press could stop — single click toggles pause
+  if (currentState === 'playing') {
     try {
-      await fetch('/api/pause', { method: 'POST' });
+      await fetch('/api/stop', { method: 'POST' });
       pollStatus();
     } catch {}
     return;

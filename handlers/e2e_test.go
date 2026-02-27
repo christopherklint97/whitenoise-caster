@@ -1,0 +1,389 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sync"
+	"testing"
+
+	"github.com/telnesstech/whitenoise-caster/cast"
+	"github.com/telnesstech/whitenoise-caster/config"
+)
+
+// e2eMock is a stateful mock that simulates real controller state transitions.
+type e2eMock struct {
+	mu     sync.Mutex
+	status cast.Status
+}
+
+func (m *e2eMock) Play(_ context.Context, ip, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status = cast.Status{
+		State:       cast.StatePlaying,
+		SpeakerIP:   ip,
+		SpeakerName: name,
+	}
+	return nil
+}
+
+func (m *e2eMock) Pause() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch m.status.State {
+	case cast.StatePlaying:
+		m.status.State = cast.StatePaused
+	case cast.StatePaused:
+		m.status.State = cast.StatePlaying
+	default:
+		return fmt.Errorf("cannot toggle pause in state: %s", m.status.State)
+	}
+	return nil
+}
+
+func (m *e2eMock) Stop() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status = cast.Status{State: cast.StateDisconnected}
+	return nil
+}
+
+func (m *e2eMock) GetStatus() cast.Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.status
+}
+
+// e2eEnv bundles the test server, client, and config for E2E tests.
+type e2eEnv struct {
+	server    *httptest.Server
+	client    *http.Client
+	cfg       *config.Config
+	audioFile string
+}
+
+func setupE2E(t *testing.T, authUser, authPass string) *e2eEnv {
+	t.Helper()
+
+	// Temp audio file
+	audioFile, err := os.CreateTemp(t.TempDir(), "whitenoise-*.mp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	audioFile.Write([]byte("fake-mp3-data-for-testing"))
+	audioFile.Close()
+
+	cfg := &config.Config{
+		Speakers: []config.Speaker{
+			{Name: "Living Room", IP: "192.168.1.100"},
+			{Name: "Bedroom", IP: "192.168.1.101"},
+		},
+		AudioFile:  audioFile.Name(),
+		AudioURL:   "https://example.com",
+		ListenAddr: ":0",
+		SecretPath: "test-secret",
+	}
+	cfg.Auth.Username = authUser
+	cfg.Auth.Password = authPass
+
+	mock := &e2eMock{status: cast.Status{State: cast.StateDisconnected}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	webFS := os.DirFS("../web")
+	h := New(cfg, mock, logger, webFS)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return &e2eEnv{
+		server:    srv,
+		client:    srv.Client(),
+		cfg:       cfg,
+		audioFile: audioFile.Name(),
+	}
+}
+
+func (e *e2eEnv) url(path string) string {
+	return e.server.URL + path
+}
+
+func (e *e2eEnv) get(t *testing.T, path string) *http.Response {
+	t.Helper()
+	resp, err := e.client.Get(e.url(path))
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	return resp
+}
+
+func (e *e2eEnv) getWithAuth(t *testing.T, path, user, pass string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("GET", e.url(path), nil)
+	req.SetBasicAuth(user, pass)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	return resp
+}
+
+func (e *e2eEnv) postJSON(t *testing.T, path string, body any) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	resp, err := e.client.Post(e.url(path), "application/json", &buf)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
+func (e *e2eEnv) postRaw(t *testing.T, path, body string) *http.Response {
+	t.Helper()
+	resp, err := e.client.Post(e.url(path), "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
+func (e *e2eEnv) postEmpty(t *testing.T, path string) *http.Response {
+	t.Helper()
+	resp, err := e.client.Post(e.url(path), "", nil)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
+func decodeStatus(t *testing.T, resp *http.Response) cast.Status {
+	t.Helper()
+	defer resp.Body.Close()
+	var s cast.Status
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	return s
+}
+
+func assertCode(t *testing.T, resp *http.Response, want int) {
+	t.Helper()
+	if resp.StatusCode != want {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("want status %d, got %d: %s", want, resp.StatusCode, body)
+	}
+}
+
+func TestE2E_FullLifecycle(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Initially disconnected
+	resp := env.get(t, "/api/status")
+	s := decodeStatus(t, resp)
+	if s.State != cast.StateDisconnected {
+		t.Fatalf("initial state: want disconnected, got %s", s.State)
+	}
+
+	// Play Living Room
+	resp = env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after play: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+
+	// Status confirms playing
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("status after play: want playing, got %s", s.State)
+	}
+
+	// Stop
+	resp = env.postEmpty(t, "/api/stop")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StateDisconnected {
+		t.Fatalf("after stop: want disconnected, got %s", s.State)
+	}
+
+	// Status confirms disconnected
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StateDisconnected {
+		t.Fatalf("status after stop: want disconnected, got %s", s.State)
+	}
+
+	// Play a different speaker
+	resp = env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.101"})
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after second play: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Bedroom" {
+		t.Fatalf("speaker_name: want Bedroom, got %s", s.SpeakerName)
+	}
+}
+
+func TestE2E_StaticFiles(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	t.Run("index.html", func(t *testing.T) {
+		resp := env.get(t, "/")
+		assertCode(t, resp, 200)
+		ct := resp.Header.Get("Content-Type")
+		if ct != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type: want text/html; charset=utf-8, got %s", ct)
+		}
+	})
+
+	t.Run("manifest.json", func(t *testing.T) {
+		resp := env.get(t, "/manifest.json")
+		assertCode(t, resp, 200)
+		ct := resp.Header.Get("Content-Type")
+		if ct != "application/manifest+json" {
+			t.Errorf("Content-Type: want application/manifest+json, got %s", ct)
+		}
+	})
+
+	t.Run("icon.png", func(t *testing.T) {
+		resp := env.get(t, "/icon.png")
+		assertCode(t, resp, 200)
+		ct := resp.Header.Get("Content-Type")
+		if ct != "image/png" {
+			t.Errorf("Content-Type: want image/png, got %s", ct)
+		}
+	})
+
+	t.Run("nonexistent returns 404", func(t *testing.T) {
+		resp := env.get(t, "/nonexistent")
+		assertCode(t, resp, 404)
+	})
+}
+
+func TestE2E_AudioEndpoint(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	t.Run("correct secret returns audio", func(t *testing.T) {
+		resp := env.get(t, "/audio/test-secret/whitenoise.mp3")
+		assertCode(t, resp, 200)
+		ct := resp.Header.Get("Content-Type")
+		if ct != "audio/mpeg" {
+			t.Errorf("Content-Type: want audio/mpeg, got %s", ct)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(body) != "fake-mp3-data-for-testing" {
+			t.Errorf("body: want fake-mp3-data-for-testing, got %s", body)
+		}
+	})
+
+	t.Run("wrong secret returns 404", func(t *testing.T) {
+		resp := env.get(t, "/audio/wrong-secret/whitenoise.mp3")
+		assertCode(t, resp, 404)
+	})
+
+	t.Run("supports Range requests", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", env.url("/audio/test-secret/whitenoise.mp3"), nil)
+		req.Header.Set("Range", "bytes=0-9")
+		resp, err := env.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusPartialContent {
+			t.Fatalf("want 206, got %d", resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if string(body) != "fake-mp3-d" {
+			t.Errorf("range body: want %q, got %q", "fake-mp3-d", body)
+		}
+	})
+}
+
+func TestE2E_PlayValidation(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	t.Run("unknown speaker", func(t *testing.T) {
+		resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "10.0.0.1"})
+		assertCode(t, resp, 400)
+	})
+
+	t.Run("empty body", func(t *testing.T) {
+		resp := env.postRaw(t, "/api/play", "")
+		assertCode(t, resp, 400)
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		resp := env.postRaw(t, "/api/play", "{not json")
+		assertCode(t, resp, 400)
+	})
+}
+
+func TestE2E_StopIdempotent(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Stop while already disconnected should be fine
+	resp := env.postEmpty(t, "/api/stop")
+	assertCode(t, resp, 200)
+	s := decodeStatus(t, resp)
+	if s.State != cast.StateDisconnected {
+		t.Fatalf("want disconnected, got %s", s.State)
+	}
+}
+
+func TestE2E_AuthRequired(t *testing.T) {
+	env := setupE2E(t, "admin", "secret")
+
+	apiEndpoints := []struct {
+		method string
+		path   string
+	}{
+		{"GET", "/api/status"},
+		{"GET", "/api/speakers"},
+		{"POST", "/api/play"},
+		{"POST", "/api/pause"},
+		{"POST", "/api/stop"},
+	}
+
+	t.Run("API requires auth", func(t *testing.T) {
+		for _, ep := range apiEndpoints {
+			t.Run(ep.method+" "+ep.path, func(t *testing.T) {
+				req, _ := http.NewRequest(ep.method, env.url(ep.path), nil)
+				resp, err := env.client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertCode(t, resp, 401)
+			})
+		}
+	})
+
+	t.Run("API works with creds", func(t *testing.T) {
+		resp := env.getWithAuth(t, "/api/status", "admin", "secret")
+		assertCode(t, resp, 200)
+	})
+
+	t.Run("static files need no auth", func(t *testing.T) {
+		resp := env.get(t, "/")
+		assertCode(t, resp, 200)
+
+		resp = env.get(t, "/manifest.json")
+		assertCode(t, resp, 200)
+	})
+
+	t.Run("audio needs no auth", func(t *testing.T) {
+		resp := env.get(t, "/audio/test-secret/whitenoise.mp3")
+		assertCode(t, resp, 200)
+	})
+}

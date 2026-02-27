@@ -1,0 +1,22 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/whitenoise-caster ."
+  bin = "./tmp/whitenoise-caster"
+  args_bin = ["-config", "config.yaml"]
+  include_ext = ["go", "yaml"]
+  exclude_dir = ["tmp", "vendor"]
+  delay = 500
+
+[log]
+  time = false
+
+[color]
+  main = "yellow"
+  watcher = "cyan"
+  build = "blue"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

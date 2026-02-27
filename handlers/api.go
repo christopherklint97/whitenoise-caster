@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"log/slog"
@@ -11,14 +12,22 @@ import (
 	"github.com/telnesstech/whitenoise-caster/config"
 )
 
+// Caster controls Chromecast playback.
+type Caster interface {
+	Play(ctx context.Context, speakerIP, speakerName string) error
+	Pause() error
+	Stop() error
+	GetStatus() cast.Status
+}
+
 type Handler struct {
 	cfg        *config.Config
-	controller *cast.Controller
+	controller Caster
 	log        *slog.Logger
 	webFS      fs.FS
 }
 
-func New(cfg *config.Config, controller *cast.Controller, logger *slog.Logger, webFS fs.FS) *Handler {
+func New(cfg *config.Config, controller Caster, logger *slog.Logger, webFS fs.FS) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		controller: controller,
