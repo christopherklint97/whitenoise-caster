@@ -134,10 +134,9 @@ func (c *Controller) Pause() error {
 
 	switch c.status.State {
 	case StatePlaying:
-		// Stop media (not Cast pause) so position doesn't matter on resume.
-		c.log.Info("pausing: stopping media on speaker", "speaker", c.status.SpeakerName)
-		if err := c.app.StopMedia(); err != nil {
-			return fmt.Errorf("stopping media: %w", err)
+		c.log.Info("pausing playback", "speaker", c.status.SpeakerName)
+		if err := c.app.Pause(); err != nil {
+			return fmt.Errorf("pausing: %w", err)
 		}
 		c.status.State = StatePaused
 		c.log.Info("paused")
