@@ -341,6 +341,55 @@ func TestE2E_PlayValidation(t *testing.T) {
 	})
 }
 
+func TestE2E_PauseResumeCycle(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Play
+	resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	s := decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after play: want playing, got %s", s.State)
+	}
+
+	// Pause — should stay connected with speaker info
+	resp = env.postEmpty(t, "/api/pause")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePaused {
+		t.Fatalf("after pause: want paused, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("paused speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+	if s.SpeakerIP != "192.168.1.100" {
+		t.Fatalf("paused speaker_ip: want 192.168.1.100, got %s", s.SpeakerIP)
+	}
+
+	// Status confirms paused with speaker info
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePaused {
+		t.Fatalf("status after pause: want paused, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("status paused speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+
+	// Resume (pause again toggles back to playing)
+	resp = env.postEmpty(t, "/api/pause")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after resume: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("resumed speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+
+	// Pause while disconnected should error
+	env.postEmpty(t, "/api/stop")
+	resp = env.postEmpty(t, "/api/pause")
+	assertCode(t, resp, 400)
+}
+
 func TestE2E_StopIdempotent(t *testing.T) {
 	env := setupE2E(t, "", "")
 
