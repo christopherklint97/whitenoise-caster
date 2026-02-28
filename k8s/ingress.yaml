@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whitenoise-caster
+  namespace: whitenoise
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - noise.example.com
+      secretName: whitenoise-tls
+  rules:
+    - host: noise.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: whitenoise-caster
+                port:
+                  number: 8080

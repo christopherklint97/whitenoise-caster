@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whitenoise-caster
+  namespace: whitenoise
+  labels:
+    app: whitenoise-caster
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: whitenoise-caster
+  template:
+    metadata:
+      labels:
+        app: whitenoise-caster
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: whitenoise-caster
+          image: ghcr.io/christopherklint97/whitenoise-caster:latest
+          imagePullPolicy: Always
+          args: ["-config", "/etc/whitenoise/config.yaml"]
+          ports:
+            - containerPort: 8080
+              hostPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/whitenoise
+              readOnly: true
+            - name: audio
+              mountPath: /audio
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: config
+          secret:
+            secretName: whitenoise-config
+        - name: audio
+          hostPath:
+            path: /opt/whitenoise-caster
+            type: Directory
+      imagePullSecrets:
+        - name: ghcr-secret

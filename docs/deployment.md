@@ -9,9 +9,9 @@ Whitenoise Caster runs on a Hetzner VPS and reaches Chromecasts on a home LAN th
 │  Hetzner VPS         │◄──────────────────────────►│  Archer AX1800 (v1.2) │
 │  (OpenVPN client)    │       10.8.0.x             │  (OpenVPN server)     │
 │                      │                             │                       │
-│  Docker (host net):  │                             │  Home LAN:            │
-│  - app    (:8080)    │─── TCP 8009 ──────────────►│  - Speaker A          │
-│  - caddy  (:80/443)  │    via 192.168.0.x         │    192.168.0.x        │
+│  k3s (hostNetwork):  │                             │  Home LAN:            │
+│  - app pod (:8080)   │─── TCP 8009 ──────────────►│  - Speaker A          │
+│  - traefik (:80/443) │    via 192.168.0.x         │    192.168.0.x        │
 │                      │                             │  - Speaker B          │
 │                      │◄── HTTPS audio fetch ──────│    192.168.0.x        │
 └──────────────────────┘                             └───────────────────────┘
@@ -103,20 +103,26 @@ apt update && apt upgrade -y
 # Install OpenVPN
 apt install -y openvpn
 
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-systemctl enable --now docker
+# Install k3s
+curl -sfL https://get.k3s.io | sh -
 
-# Install Docker Compose plugin
-apt install -y docker-compose-plugin
+# Verify k3s is running
+kubectl get nodes
+
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+
+# Wait for cert-manager to be ready
+kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=120s
 ```
 
 ### Firewall (if ufw is active)
 
 ```bash
 ufw allow 22/tcp    # SSH
-ufw allow 80/tcp    # HTTP (Caddy redirect to HTTPS)
+ufw allow 80/tcp    # HTTP (Traefik ACME + redirect)
 ufw allow 443/tcp   # HTTPS
+ufw allow 6443/tcp  # k3s API server (optional, for remote kubectl)
 ufw enable
 ```
 
@@ -169,91 +175,78 @@ dig +short noise.example.com
 
 ## Step 6: Deploy the Application
 
-### Clone the repo
+### Place the audio file
 
 ```bash
-git clone <your-repo-url> /opt/whitenoise-caster
-cd /opt/whitenoise-caster
-```
-
-### Add the audio file
-
-```bash
-# From your local machine
+mkdir -p /opt/whitenoise-caster
 scp whitenoise.mp3 root@<VPS_IP>:/opt/whitenoise-caster/
 ```
 
 ### Create the production config
 
-Create the production config and Caddyfile from the examples:
+On your local machine, create `config.prod.yaml` from the example:
 
 ```bash
 cp config.example.yaml config.prod.yaml
 nano config.prod.yaml
 ```
 
-Fill in your real speaker IPs (on the `192.168.0.x` subnet), set `audio_url` to your real domain, and set `auth.username` / `auth.password`.
+Fill in your real speaker IPs (on the `192.168.0.x` subnet), set `audio_file` to `/audio/whitenoise.mp3`, set `audio_url` to your real domain (e.g. `https://noise.example.com`), and set `auth.username` / `auth.password`.
+
+### Update k8s manifests
+
+Edit `k8s/ingress.yaml` and replace `noise.example.com` with your real domain (both in `tls.hosts` and `rules.host`).
+
+Edit `k8s/cert-manager/clusterissuer.yaml` and replace `you@example.com` with your real email for Let's Encrypt notifications.
+
+### Create secrets and apply manifests
 
 ```bash
-cp Caddyfile Caddyfile.prod
-nano Caddyfile.prod
-```
+# Create the namespace
+make k8s-apply
 
-Replace `noise.example.com` with your real domain and change `app:8080` to `localhost:8080` (since production uses host networking).
+# Create the config secret from config.prod.yaml
+make k8s-secret
 
-Both files are gitignored — do not commit them.
-
-### Production files
-
-The production compose file uses `network_mode: host` so the app and Caddy share the VPS network stack. This gives the app direct access to the `tun0` interface (OpenVPN tunnel) to reach Chromecasts, and lets Caddy bind to ports 80/443 directly. Watchtower runs alongside to auto-pull new images from GHCR.
-
-| File | Purpose | Committed? |
-|------|---------|------------|
-| `docker-compose.prod.yml` | Production compose (host networking + watchtower) | Yes |
-| `config.example.yaml` | Template for creating config files | Yes |
-| `Caddyfile` | Template Caddyfile (example domain) | Yes |
-| `config.prod.yaml` | Production config with credentials | **No** (gitignored) |
-| `Caddyfile.prod` | Production Caddyfile with real domain | **No** (gitignored) |
-
-### Authenticate with GHCR
-
-The app image is pushed to GitHub Container Registry by CI. Log in so Docker (and Watchtower) can pull it:
-
-```bash
-# Create a GitHub Personal Access Token (classic) with `read:packages` scope
-# at https://github.com/settings/tokens
-echo "<YOUR_GHCR_TOKEN>" | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
-```
-
-This writes credentials to `~/.docker/config.json`, which Watchtower also reads.
-
-### Start everything
-
-```bash
-cd /opt/whitenoise-caster
-make deploy-prod
-# or: docker compose -f docker-compose.prod.yml up -d --pull always
+# Create the GHCR image pull secret
+# Create a GitHub PAT with read:packages scope at https://github.com/settings/tokens
+make k8s-secret-pull GHCR_USER=<your-github-username> GHCR_TOKEN=<your-pat>
 ```
 
 ### Verify
 
 ```bash
-# Check containers are running
-docker compose -f docker-compose.prod.yml ps
+# Check pod status
+make k8s-status
 
 # Watch logs
-docker compose -f docker-compose.prod.yml logs -f
+make k8s-logs
 
 # Test the API
-curl https://noise.example.com/api/status
+curl -v https://noise.example.com/api/status -u user:pass
+
+# Test the audio endpoint
+curl -I https://noise.example.com/audio/<secret>/whitenoise.mp3
 ```
+
+### Enable CI deploy
+
+Set the following secrets in your GitHub repository (Settings > Secrets and variables > Actions):
+
+| Secret | Value |
+|--------|-------|
+| `VPS_HOST` | VPS public IP or hostname |
+| `VPS_USER` | SSH user (e.g. `root`) |
+| `VPS_SSH_KEY` | Private SSH key for the VPS |
+
+After setting these, every push to `main` will automatically build, push, and deploy.
 
 ## Network Flow
 
 When you hit "Play" in the web UI:
 
 1. Your phone sends `POST /api/play` to `noise.example.com` (Hetzner VPS)
-2. Caddy terminates TLS and proxies to the app on `localhost:8080`
+2. Traefik terminates TLS and routes to the app pod on port 8080
 3. The app connects to the Chromecast at `192.168.0.x:8009` through the OpenVPN tunnel (`tun0`)
 4. The app tells the Chromecast to load audio from `https://noise.example.com/audio/<secret>/whitenoise.mp3`
 5. The Chromecast fetches the audio over the public internet (Chromecast -> Google DNS -> your VPS)
@@ -264,21 +257,18 @@ When you hit "Play" in the web UI:
 ### Restarting
 
 ```bash
-cd /opt/whitenoise-caster
-docker compose -f docker-compose.prod.yml restart        # restart containers
-docker compose -f docker-compose.prod.yml up -d --build  # rebuild and restart
+make k8s-deploy
+# or: kubectl rollout restart deployment/whitenoise-caster -n whitenoise
 ```
 
 ### Updating
 
-Updates happen automatically. When you push to `main`, GitHub Actions builds and pushes a new image to GHCR. Watchtower (running on the VPS) checks for new images every 5 minutes and restarts the container when one is found.
+Updates happen automatically. When you push to `main`, GitHub Actions builds a new image, pushes it to GHCR, and SSHes into the VPS to run `kubectl rollout restart`. The pod pulls the latest image (via `imagePullPolicy: Always`) and restarts.
 
 To manually trigger an update:
 
 ```bash
-cd /opt/whitenoise-caster
-docker compose -f docker-compose.prod.yml pull app
-docker compose -f docker-compose.prod.yml up -d
+make k8s-deploy
 ```
 
 ### Checking the VPN tunnel
@@ -292,16 +282,48 @@ ip addr show tun0
 
 # Test connectivity to home LAN
 ping 192.168.0.1
+
+# Verify pod can see the tunnel
+kubectl exec -n whitenoise deployment/whitenoise-caster -- ip addr show tun0
 ```
 
 ### Viewing logs
 
 ```bash
-# App + Caddy logs
-docker compose -f docker-compose.prod.yml logs -f
+# App logs
+make k8s-logs
+# or: kubectl logs -f deployment/whitenoise-caster -n whitenoise
 
 # OpenVPN logs
 journalctl -u openvpn@client -f
+
+# Traefik logs
+kubectl logs -f -n kube-system -l app.kubernetes.io/name=traefik
+```
+
+### Checking resources
+
+```bash
+make k8s-status
+# or: kubectl get pods,svc,ingress -n whitenoise
+
+# Detailed pod info
+kubectl describe pod -n whitenoise -l app=whitenoise-caster
+
+# Check TLS certificate
+kubectl get certificate -n whitenoise
+```
+
+### Rollback
+
+```bash
+# Undo last deployment
+kubectl rollout undo deployment/whitenoise-caster -n whitenoise
+
+# Or pin a specific image SHA
+kubectl set image deployment/whitenoise-caster \
+  whitenoise-caster=ghcr.io/christopherklint97/whitenoise-caster:<sha> \
+  -n whitenoise
 ```
 
 ## Troubleshooting
@@ -353,14 +375,23 @@ sudo modprobe tun
 sudo systemctl restart openvpn@client
 ```
 
+### Pod issues
+
+| Symptom | Check |
+|---------|-------|
+| Pod stuck in `ImagePullBackOff` | GHCR pull secret missing or expired. Recreate: `make k8s-secret-pull GHCR_USER=... GHCR_TOKEN=...` |
+| Pod stuck in `CrashLoopBackOff` | Check logs: `make k8s-logs`. Usually a config error — verify `config.prod.yaml` and re-run `make k8s-secret` |
+| Pod running but can't reach Chromecast | Verify `hostNetwork: true` is set and `tun0` is visible inside the pod |
+| Port 8080 already in use | Another process (Docker?) is binding 8080. Stop it first |
+
 ### Other issues
 
 | Symptom | Check |
 |---------|-------|
 | VPN connects but no LAN access | Router VPN setting must be "Home Network Only" or "Internet and Home Network" — verify client access mode |
 | Chromecast can't fetch audio | The audio URL must be publicly reachable. Test: `curl https://noise.example.com/audio/<secret>/whitenoise.mp3 -I` from any network |
-| Caddy won't start | Port 80 or 443 already in use? Check with `ss -tlnp | grep -E ':80\|:443'` |
-| TLS cert fails | DNS must be propagated. Check: `dig +short noise.example.com`. Caddy needs port 80 open for the ACME HTTP challenge |
+| Traefik won't start | Port 80 or 443 already in use? Check with `ss -tlnp \| grep -E ':80\|:443'` |
+| TLS cert not issued | Check cert-manager logs: `kubectl logs -n cert-manager -l app=cert-manager`. DNS must be propagated and port 80 must be open for HTTP-01 challenge |
 | App starts but "connect: connection refused" | Chromecast may be off or on a different IP. Verify IPs in `config.yaml` match actual devices |
 
 ### VPS firewall reference
@@ -370,8 +401,9 @@ The VPS only needs these ports open:
 ```bash
 ufw status
 # 22/tcp   — SSH
-# 80/tcp   — HTTP (Caddy ACME + redirect)
+# 80/tcp   — HTTP (Traefik ACME + redirect)
 # 443/tcp  — HTTPS
+# 6443/tcp — k3s API (optional)
 ```
 
 No inbound VPN port is needed. The VPS connects **outbound** to the router as an OpenVPN client. UFW's default rules allow established/related return traffic.
@@ -380,7 +412,22 @@ No inbound VPN port is needed. The VPS connects **outbound** to the router as an
 
 - The audio endpoint is **intentionally unauthenticated** — the Chromecast needs to fetch it without credentials. The `secret_path` in the URL provides obscurity.
 - All other API endpoints are behind basic auth.
-- Caddy enforces HTTPS with automatic certificate management.
+- Traefik enforces HTTPS with automatic certificate management via cert-manager.
 - The OpenVPN tunnel encrypts all traffic between the VPS and your home network.
-- `config.prod.yaml` is gitignored. Never commit files containing credentials. Use `config.example.yaml` as a template.
+- Config secrets are stored as Kubernetes Secrets in-cluster. Never commit `config.prod.yaml`.
 - The router's SPI Firewall should remain enabled. "Respond to Pings from WAN" can stay disabled — it's not needed for OpenVPN.
+
+## Migration from Docker Compose
+
+If migrating from the previous Docker Compose setup:
+
+1. Install k3s and cert-manager (see Step 3)
+2. Stop Caddy to free ports 80/443: `docker compose -f docker-compose.prod.yml stop caddy`
+3. Apply k8s manifests and create secrets (see Step 6)
+4. Stop the Docker app to free port 8080: `docker compose -f docker-compose.prod.yml stop app`
+5. Verify the k3s pod starts and TLS cert is issued
+6. Test the full flow: UI, play/pause/stop, audio endpoint
+7. Set GitHub Actions secrets to enable CI deploy
+8. Tear down Docker Compose: `docker compose -f docker-compose.prod.yml down`
+
+**Rollback during migration:** Docker Compose is still installed. Scale k3s to 0 replicas and restart Docker Compose with `make deploy-prod`.
