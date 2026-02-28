@@ -548,8 +548,8 @@ func TestAuth(t *testing.T) {
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("expected 401 without auth, got %d", w.Code)
 		}
-		if w.Header().Get("WWW-Authenticate") == "" {
-			t.Error("expected WWW-Authenticate header")
+		if w.Header().Get("WWW-Authenticate") != "" {
+			t.Error("expected no WWW-Authenticate header (frontend handles login UI)")
 		}
 	})
 

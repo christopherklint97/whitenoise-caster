@@ -30,9 +30,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .vol-btn.active{border-color:#00cc66;color:#00cc66}
 .status{margin-top:1rem;font-size:14px;color:#888;text-align:center;min-height:20px}
 .status.error-text{color:#cc3333}
+.login-overlay{position:fixed;inset:0;background:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100}
+.login-overlay.hidden{display:none}
+.login-sad{font-size:80px;margin-bottom:1.5rem;line-height:1}
+.login-msg{color:#888;font-size:16px;margin-bottom:2rem;text-align:center;padding:0 2rem}
+.login-form{display:flex;flex-direction:column;gap:12px;width:80vw;max-width:280px}
+.login-form input{padding:12px 16px;background:#222;color:#eee;border:1px solid #333;border-radius:12px;font-size:16px;outline:none}
+.login-form input:focus{border-color:#555}
+.login-form button{padding:12px;background:#222;color:#eee;border:2px solid #333;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;transition:all .2s ease}
+.login-form button:active{transform:scale(.95)}
+.login-error{color:#cc3333;font-size:14px;text-align:center;min-height:20px}
 </style>
 </head>
 <body>
+
+<div class="login-overlay hidden" id="loginOverlay">
+  <div class="login-sad">:(</div>
+  <div class="login-msg">Authentication required</div>
+  <form class="login-form" id="loginForm">
+    <input type="text" id="loginUser" placeholder="Username" autocomplete="username" required>
+    <input type="password" id="loginPass" placeholder="Password" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
+</div>
 
 <div class="speaker-select">
   <select id="speaker" aria-label="Select speaker">
@@ -61,9 +82,50 @@ const statusEl = document.getElementById('status');
 const playIcon = document.getElementById('playIcon');
 const pauseIcon = document.getElementById('pauseIcon');
 const stopIcon = document.getElementById('stopIcon');
+const loginOverlay = document.getElementById('loginOverlay');
+const loginForm = document.getElementById('loginForm');
+const loginError = document.getElementById('loginError');
 
 let currentState = 'disconnected';
 let activeSpeakerIP = '';
+let authHeader = localStorage.getItem('auth') || '';
+
+function showLogin() {
+  loginOverlay.classList.remove('hidden');
+  loginError.textContent = '';
+}
+
+function hideLogin() {
+  loginOverlay.classList.add('hidden');
+}
+
+function authFetch(url, opts = {}) {
+  if (authHeader) {
+    opts.headers = { ...opts.headers, 'Authorization': authHeader };
+  }
+  return fetch(url, opts);
+}
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const user = document.getElementById('loginUser').value;
+  const pass = document.getElementById('loginPass').value;
+  authHeader = 'Basic ' + btoa(user + ':' + pass);
+  try {
+    const res = await authFetch('/api/status');
+    if (res.status === 401) {
+      authHeader = '';
+      loginError.textContent = 'Wrong username or password';
+      return;
+    }
+    localStorage.setItem('auth', authHeader);
+    hideLogin();
+    loadSpeakers();
+    pollStatus();
+  } catch {
+    loginError.textContent = 'Connection error';
+  }
+});
 
 function showIcon(state) {
   playIcon.style.display = 'none';
@@ -93,7 +155,8 @@ function updateUI(data) {
 
 async function loadSpeakers() {
   try {
-    const res = await fetch('/api/speakers');
+    const res = await authFetch('/api/speakers');
+    if (res.status === 401) { showLogin(); return; }
     const speakers = await res.json();
     speakerSel.innerHTML = '';
     const saved = localStorage.getItem('lastSpeaker');
@@ -111,7 +174,8 @@ async function loadSpeakers() {
 
 async function pollStatus() {
   try {
-    const res = await fetch('/api/status');
+    const res = await authFetch('/api/status');
+    if (res.status === 401) { showLogin(); return; }
     const data = await res.json();
     updateUI(data);
   } catch {}
@@ -125,7 +189,7 @@ btn.addEventListener('click', async () => {
   // If playing/paused on the same speaker, toggle pause
   if ((currentState === 'playing' || currentState === 'paused') && selectedIP === activeSpeakerIP) {
     try {
-      await fetch('/api/pause', { method: 'POST' });
+      await authFetch('/api/pause', { method: 'POST' });
       pollStatus();
     } catch {}
     return;
@@ -138,7 +202,7 @@ btn.addEventListener('click', async () => {
   try {
     statusEl.textContent = 'Connecting...';
     btn.className = 'play-btn connecting';
-    const res = await fetch('/api/play', {
+    const res = await authFetch('/api/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ speaker_ip: selectedIP })
@@ -160,7 +224,7 @@ btn.addEventListener('pointerdown', () => {
   if (currentState === 'disconnected') return;
   pressTimer = setTimeout(async () => {
     try {
-      await fetch('/api/stop', { method: 'POST' });
+      await authFetch('/api/stop', { method: 'POST' });
       pollStatus();
     } catch {}
   }, 800);
@@ -173,7 +237,7 @@ document.querySelectorAll('.vol-btn').forEach(b => {
     if (currentState !== 'playing' && currentState !== 'paused') return;
     const level = parseFloat(b.dataset.level);
     try {
-      await fetch('/api/volume', {
+      await authFetch('/api/volume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ level })

@@ -62,7 +62,8 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != h.cfg.Auth.Username || pass != h.cfg.Auth.Password {
-			w.Header().Set("WWW-Authenticate", `Basic realm="whitenoise"`)
+			// No WWW-Authenticate header — avoids browser's native login popup.
+			// The frontend handles auth via its own login UI.
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
