@@ -22,3 +22,6 @@ config.prod.yaml
 
 # Production Caddyfile (use Caddyfile as a template)
 Caddyfile.prod
+
+# OpenVPN
+*.ovpn
