@@ -89,6 +89,7 @@ const loginError = document.getElementById('loginError');
 let currentState = 'disconnected';
 let activeSpeakerIP = '';
 let authHeader = localStorage.getItem('auth') || '';
+let pollTimer = null;
 
 function showLogin() {
   loginOverlay.classList.remove('hidden');
@@ -120,8 +121,7 @@ loginForm.addEventListener('submit', async (e) => {
     }
     localStorage.setItem('auth', authHeader);
     hideLogin();
-    loadSpeakers();
-    pollStatus();
+    startSession();
   } catch {
     loginError.textContent = 'Connection error';
   }
@@ -248,11 +248,29 @@ document.querySelectorAll('.vol-btn').forEach(b => {
   });
 });
 
+function startSession() {
+  loadSpeakers();
+  pollStatus();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollStatus, 3000);
+}
+
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
 
-loadSpeakers();
-pollStatus();
-setInterval(pollStatus, 3000);
+// Only start polling if we have saved credentials; otherwise show login
+if (authHeader) {
+  authFetch('/api/status').then(res => {
+    if (res.status === 401) {
+      authHeader = '';
+      localStorage.removeItem('auth');
+      showLogin();
+    } else {
+      startSession();
+    }
+  }).catch(() => showLogin());
+} else {
+  showLogin();
+}
 </script>
 </body>
 </html>

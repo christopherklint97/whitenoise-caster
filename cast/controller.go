@@ -47,7 +47,6 @@ const connectTimeout = 10 * time.Second
 
 func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	// Stop any existing session
 	c.stopLocked()
@@ -58,7 +57,14 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 		SpeakerName: speakerName,
 	}
 
+	// Unlock during slow network I/O so GetStatus and other reads aren't blocked.
+	c.mu.Unlock()
+
 	client, err := c.connectAndLaunch(ctx, speakerIP)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if err != nil {
 		c.status = Status{State: StateError, Error: fmt.Sprintf("connect: %v", err)}
 		return fmt.Errorf("connecting to %s (%s): %w", speakerName, speakerIP, err)
@@ -230,7 +236,7 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 				c.log.Error("status poll failed", "error", err, "consecutive", consecutiveErrors)
 				if consecutiveErrors >= 3 {
 					c.log.Error("too many consecutive errors, attempting full reconnect")
-					c.reconnectLocked(ctx, speakerIP, speakerName)
+					c.reconnect(ctx, speakerIP, speakerName)
 					consecutiveErrors = 0
 				}
 				c.mu.Unlock()
@@ -262,7 +268,9 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 	}
 }
 
-func (c *Controller) reconnectLocked(ctx context.Context, speakerIP, speakerName string) {
+// reconnect drops the lock during slow I/O, then re-acquires it.
+// Caller must hold c.mu and must NOT use defer c.mu.Unlock() before calling this.
+func (c *Controller) reconnect(ctx context.Context, speakerIP, speakerName string) {
 	if c.client != nil {
 		c.client.Close()
 		c.client = nil
@@ -270,7 +278,11 @@ func (c *Controller) reconnectLocked(ctx context.Context, speakerIP, speakerName
 
 	c.log.Info("reconnecting", "speaker", speakerName, "ip", speakerIP)
 
+	// Drop lock during slow network I/O.
+	c.mu.Unlock()
 	client, err := c.connectAndLaunch(ctx, speakerIP)
+	c.mu.Lock()
+
 	if err != nil {
 		c.log.Error("reconnect failed", "error", err)
 		c.status = Status{
