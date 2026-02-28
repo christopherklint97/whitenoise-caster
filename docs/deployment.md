@@ -205,22 +205,34 @@ Both files are gitignored — do not commit them.
 
 ### Production files
 
-The production compose file uses `network_mode: host` so both containers share the VPS network stack. This gives the app direct access to the `tun0` interface (OpenVPN tunnel) to reach Chromecasts, and lets Caddy bind to ports 80/443 directly.
+The production compose file uses `network_mode: host` so the app and Caddy share the VPS network stack. This gives the app direct access to the `tun0` interface (OpenVPN tunnel) to reach Chromecasts, and lets Caddy bind to ports 80/443 directly. Watchtower runs alongside to auto-pull new images from GHCR.
 
 | File | Purpose | Committed? |
 |------|---------|------------|
-| `docker-compose.prod.yml` | Production compose (host networking) | Yes |
+| `docker-compose.prod.yml` | Production compose (host networking + watchtower) | Yes |
 | `config.example.yaml` | Template for creating config files | Yes |
 | `Caddyfile` | Template Caddyfile (example domain) | Yes |
 | `config.prod.yaml` | Production config with credentials | **No** (gitignored) |
 | `Caddyfile.prod` | Production Caddyfile with real domain | **No** (gitignored) |
+
+### Authenticate with GHCR
+
+The app image is pushed to GitHub Container Registry by CI. Log in so Docker (and Watchtower) can pull it:
+
+```bash
+# Create a GitHub Personal Access Token (classic) with `read:packages` scope
+# at https://github.com/settings/tokens
+echo "<YOUR_GHCR_TOKEN>" | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
+```
+
+This writes credentials to `~/.docker/config.json`, which Watchtower also reads.
 
 ### Start everything
 
 ```bash
 cd /opt/whitenoise-caster
 make deploy-prod
-# or: docker compose -f docker-compose.prod.yml up -d --build
+# or: docker compose -f docker-compose.prod.yml up -d --pull always
 ```
 
 ### Verify
@@ -259,10 +271,14 @@ docker compose -f docker-compose.prod.yml up -d --build  # rebuild and restart
 
 ### Updating
 
+Updates happen automatically. When you push to `main`, GitHub Actions builds and pushes a new image to GHCR. Watchtower (running on the VPS) checks for new images every 5 minutes and restarts the container when one is found.
+
+To manually trigger an update:
+
 ```bash
 cd /opt/whitenoise-caster
-git pull
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.prod.yml pull app
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Checking the VPN tunnel

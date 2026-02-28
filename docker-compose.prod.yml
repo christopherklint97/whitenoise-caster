@@ -1,6 +1,6 @@
 services:
   app:
-    build: .
+    image: ghcr.io/christopherklint97/whitenoise-caster:latest
     restart: unless-stopped
     network_mode: host
     volumes:
@@ -15,6 +15,14 @@ services:
       - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+
+  watchtower:
+    image: containrrr/watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ~/.docker/config.json:/config.json:ro
+    command: --interval 300 --cleanup
 
 volumes:
   caddy_data:
