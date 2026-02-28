@@ -18,10 +18,11 @@ import (
 
 // mockCaster implements Caster for testing.
 type mockCaster struct {
-	playFunc  func(ctx context.Context, ip, name string) error
-	pauseFunc func() error
-	stopFunc  func() error
-	status    cast.Status
+	playFunc      func(ctx context.Context, ip, name string) error
+	pauseFunc     func() error
+	stopFunc      func() error
+	setVolumeFunc func(level float32) error
+	status        cast.Status
 }
 
 func (m *mockCaster) Play(ctx context.Context, ip, name string) error {
@@ -41,6 +42,13 @@ func (m *mockCaster) Pause() error {
 func (m *mockCaster) Stop() error {
 	if m.stopFunc != nil {
 		return m.stopFunc()
+	}
+	return nil
+}
+
+func (m *mockCaster) SetVolume(level float32) error {
+	if m.setVolumeFunc != nil {
+		return m.setVolumeFunc(level)
 	}
 	return nil
 }
@@ -377,6 +385,95 @@ func TestHandleStop(t *testing.T) {
 	})
 }
 
+func TestHandleVolume(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		var gotLevel float32
+		mock := &mockCaster{
+			setVolumeFunc: func(level float32) error {
+				gotLevel = level
+				return nil
+			},
+			status: cast.Status{State: cast.StatePlaying, SpeakerName: "Living Room"},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"level":0.3}`
+		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if gotLevel != 0.3 {
+			t.Errorf("level: want 0.3, got %f", gotLevel)
+		}
+	})
+
+	t.Run("level too high", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"level":1.5}`
+		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("level negative", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"level":-0.1}`
+		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid body", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString("{bad"))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("not connected error", func(t *testing.T) {
+		mock := &mockCaster{
+			setVolumeFunc: func(level float32) error {
+				return fmt.Errorf("not connected")
+			},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"level":0.2}`
+		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
 func TestAuth(t *testing.T) {
 	t.Run("rejects unauthenticated when configured", func(t *testing.T) {
 		mock := &mockCaster{status: cast.Status{State: cast.StateDisconnected}}
@@ -460,6 +557,7 @@ func TestAuth(t *testing.T) {
 			{"POST", "/api/play"},
 			{"POST", "/api/pause"},
 			{"POST", "/api/stop"},
+			{"POST", "/api/volume"},
 		}
 
 		for _, ep := range endpoints {

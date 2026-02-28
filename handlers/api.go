@@ -17,6 +17,7 @@ type Caster interface {
 	Play(ctx context.Context, speakerIP, speakerName string) error
 	Pause() error
 	Stop() error
+	SetVolume(level float32) error
 	GetStatus() cast.Status
 }
 
@@ -49,6 +50,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/play", h.withAuth(h.handlePlay))
 	mux.HandleFunc("POST /api/pause", h.withAuth(h.handlePause))
 	mux.HandleFunc("POST /api/stop", h.withAuth(h.handleStop))
+	mux.HandleFunc("POST /api/volume", h.withAuth(h.handleVolume))
 	mux.HandleFunc("GET /api/status", h.withAuth(h.handleStatus))
 	mux.HandleFunc("GET /api/speakers", h.withAuth(h.handleSpeakers))
 }
@@ -124,6 +126,10 @@ type playRequest struct {
 	SpeakerIP string `json:"speaker_ip"`
 }
 
+type volumeRequest struct {
+	Level float32 `json:"level"`
+}
+
 func (h *Handler) handlePlay(w http.ResponseWriter, r *http.Request) {
 	var req playRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -159,6 +165,26 @@ func (h *Handler) handleStop(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	jsonOK(w, h.controller.GetStatus())
+}
+
+func (h *Handler) handleVolume(w http.ResponseWriter, r *http.Request) {
+	var req volumeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Level < 0 || req.Level > 1 {
+		jsonError(w, "level must be between 0 and 1", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.controller.SetVolume(req.Level); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	jsonOK(w, h.controller.GetStatus())
 }
 

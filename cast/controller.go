@@ -188,6 +188,22 @@ func (c *Controller) GetStatus() Status {
 	return c.status
 }
 
+func (c *Controller) SetVolume(level float32) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.app == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	if err := c.app.SetVolume(level); err != nil {
+		return fmt.Errorf("setting volume: %w", err)
+	}
+
+	c.log.Info("volume set", "level", level)
+	return nil
+}
+
 func (c *Controller) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

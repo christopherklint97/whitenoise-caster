@@ -21,6 +21,7 @@ import (
 type e2eMock struct {
 	mu     sync.Mutex
 	status cast.Status
+	volume float32
 }
 
 func (m *e2eMock) Play(_ context.Context, ip, name string) error {
@@ -52,6 +53,16 @@ func (m *e2eMock) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status = cast.Status{State: cast.StateDisconnected}
+	return nil
+}
+
+func (m *e2eMock) SetVolume(level float32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.status.State == cast.StateDisconnected {
+		return fmt.Errorf("not connected")
+	}
+	m.volume = level
 	return nil
 }
 
@@ -342,6 +353,48 @@ func TestE2E_StopIdempotent(t *testing.T) {
 	}
 }
 
+func TestE2E_Volume(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	t.Run("set volume while playing", func(t *testing.T) {
+		// Start playback first
+		resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+		assertCode(t, resp, 200)
+		resp.Body.Close()
+
+		// Set volume to 20%
+		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.2})
+		assertCode(t, resp, 200)
+		resp.Body.Close()
+
+		// Set volume to 30%
+		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.3})
+		assertCode(t, resp, 200)
+		resp.Body.Close()
+
+		// Set volume to 40%
+		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.4})
+		assertCode(t, resp, 200)
+		resp.Body.Close()
+
+		// Cleanup
+		resp = env.postEmpty(t, "/api/stop")
+		resp.Body.Close()
+	})
+
+	t.Run("set volume while disconnected fails", func(t *testing.T) {
+		resp := env.postJSON(t, "/api/volume", volumeRequest{Level: 0.3})
+		assertCode(t, resp, 400)
+		resp.Body.Close()
+	})
+
+	t.Run("invalid volume level", func(t *testing.T) {
+		resp := env.postJSON(t, "/api/volume", volumeRequest{Level: 1.5})
+		assertCode(t, resp, 400)
+		resp.Body.Close()
+	})
+}
+
 func TestE2E_AuthRequired(t *testing.T) {
 	env := setupE2E(t, "admin", "secret")
 
@@ -354,6 +407,7 @@ func TestE2E_AuthRequired(t *testing.T) {
 		{"POST", "/api/play"},
 		{"POST", "/api/pause"},
 		{"POST", "/api/stop"},
+		{"POST", "/api/volume"},
 	}
 
 	t.Run("API requires auth", func(t *testing.T) {
