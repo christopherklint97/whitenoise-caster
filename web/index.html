@@ -248,6 +248,8 @@ document.querySelectorAll('.vol-btn').forEach(b => {
   });
 });
 
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+
 loadSpeakers();
 pollStatus();
 setInterval(pollStatus, 3000);
