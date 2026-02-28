@@ -10,6 +10,7 @@ import (
 	"time"
 
 	pb "github.com/telnesstech/whitenoise-caster/cast/proto/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // CASTV2 namespaces.
@@ -49,10 +50,13 @@ type mediaStatus struct {
 
 // Connect dials the Chromecast and starts the heartbeat and read loops.
 func Connect(ctx context.Context, addr string, port int, timeout time.Duration, log *slog.Logger) (*Client, error) {
+	log.Info("dialing chromecast", "addr", addr, "port", port, "timeout", timeout)
 	conn, err := Dial(addr, port, timeout)
 	if err != nil {
+		log.Error("dial failed", "addr", addr, "error", err)
 		return nil, err
 	}
+	log.Info("dial succeeded", "addr", addr)
 
 	loopCtx, cancel := context.WithCancel(context.Background())
 
@@ -68,11 +72,14 @@ func Connect(ctx context.Context, addr string, port int, timeout time.Duration, 
 	go c.heartbeatLoop(loopCtx)
 
 	// Virtual connection to the platform receiver.
+	log.Info("sending CONNECT to platform receiver")
 	if err := c.sendConnect(platformReceiverID); err != nil {
+		log.Error("connect to receiver failed", "error", err)
 		cancel()
 		conn.Close()
 		return nil, fmt.Errorf("connect to receiver: %w", err)
 	}
+	log.Info("connected to platform receiver")
 
 	return c, nil
 }
@@ -82,14 +89,18 @@ func (c *Client) LaunchMediaReceiver(ctx context.Context) error {
 	reqID := c.allocReqID()
 	payload := fmt.Sprintf(`{"type":"LAUNCH","appId":"%s","requestId":%d}`, defaultMediaReceiverAppID, reqID)
 
+	c.log.Info("sending LAUNCH", "appId", defaultMediaReceiverAppID, "reqID", reqID)
 	if err := c.sendJSON(platformReceiverID, nsReceiver, payload); err != nil {
 		return fmt.Errorf("send LAUNCH: %w", err)
 	}
 
+	c.log.Info("waiting for LAUNCH response", "reqID", reqID)
 	resp, err := c.waitResponse(ctx, reqID)
 	if err != nil {
+		c.log.Error("LAUNCH response failed", "reqID", reqID, "error", err)
 		return fmt.Errorf("LAUNCH response: %w", err)
 	}
+	c.log.Info("LAUNCH response received", "reqID", reqID)
 
 	transportID, err := extractTransportID(resp)
 	if err != nil {
@@ -101,9 +112,11 @@ func (c *Client) LaunchMediaReceiver(ctx context.Context) error {
 	c.mu.Unlock()
 
 	// Virtual connection to the media receiver transport.
+	c.log.Info("sending CONNECT to transport", "transportID", transportID)
 	if err := c.sendConnect(transportID); err != nil {
 		return fmt.Errorf("connect to transport: %w", err)
 	}
+	c.log.Info("connected to transport", "transportID", transportID)
 
 	return nil
 }
@@ -118,14 +131,18 @@ func (c *Client) LoadMedia(ctx context.Context, url, contentType string) error {
 	payload := fmt.Sprintf(`{"type":"LOAD","requestId":%d,"autoplay":true,"media":{"contentId":"%s","contentType":"%s","streamType":"BUFFERED"}}`,
 		reqID, url, contentType)
 
+	c.log.Info("sending LOAD", "reqID", reqID, "url", url, "contentType", contentType, "transportID", transportID)
 	if err := c.sendJSON(transportID, nsMedia, payload); err != nil {
 		return fmt.Errorf("send LOAD: %w", err)
 	}
 
+	c.log.Info("waiting for LOAD response", "reqID", reqID)
 	resp, err := c.waitResponse(ctx, reqID)
 	if err != nil {
+		c.log.Error("LOAD response failed", "reqID", reqID, "error", err)
 		return fmt.Errorf("LOAD response: %w", err)
 	}
+	c.log.Info("LOAD response received", "reqID", reqID)
 
 	msID, err := extractMediaSessionID(resp)
 	if err != nil {
@@ -136,6 +153,7 @@ func (c *Client) LoadMedia(ctx context.Context, url, contentType string) error {
 	c.mediaSessionID = msID
 	c.mu.Unlock()
 
+	c.log.Info("media loaded", "mediaSessionID", msID)
 	return nil
 }
 
@@ -169,6 +187,21 @@ func (c *Client) SetVolume(ctx context.Context, level float32) error {
 	return nil
 }
 
+// SetMuted mutes or unmutes the receiver output without changing the volume level.
+func (c *Client) SetMuted(ctx context.Context, muted bool) error {
+	reqID := c.allocReqID()
+	payload := fmt.Sprintf(`{"type":"SET_VOLUME","volume":{"muted":%t},"requestId":%d}`, muted, reqID)
+
+	if err := c.sendJSON(platformReceiverID, nsReceiver, payload); err != nil {
+		return fmt.Errorf("send SET_VOLUME: %w", err)
+	}
+
+	if _, err := c.waitResponse(ctx, reqID); err != nil {
+		return fmt.Errorf("SET_VOLUME response: %w", err)
+	}
+	return nil
+}
+
 // GetMediaStatus polls for the current media status.
 func (c *Client) GetMediaStatus(ctx context.Context) (*mediaStatus, error) {
 	c.mu.Lock()
@@ -182,14 +215,18 @@ func (c *Client) GetMediaStatus(ctx context.Context) (*mediaStatus, error) {
 	reqID := c.allocReqID()
 	payload := fmt.Sprintf(`{"type":"GET_STATUS","requestId":%d}`, reqID)
 
+	c.log.Debug("sending GET_STATUS", "reqID", reqID, "transportID", transportID)
 	if err := c.sendJSON(transportID, nsMedia, payload); err != nil {
 		return nil, fmt.Errorf("send GET_STATUS: %w", err)
 	}
 
+	c.log.Debug("waiting for GET_STATUS response", "reqID", reqID)
 	resp, err := c.waitResponse(ctx, reqID)
 	if err != nil {
+		c.log.Error("GET_STATUS response failed", "reqID", reqID, "error", err)
 		return nil, fmt.Errorf("GET_STATUS response: %w", err)
 	}
+	c.log.Debug("GET_STATUS response received", "reqID", reqID)
 
 	var envelope struct {
 		Status []struct {
@@ -221,15 +258,24 @@ func (c *Client) Close() {
 	transportID := c.transportID
 	c.mu.Unlock()
 
+	c.log.Info("client closing", "transportID", transportID)
+
 	// Best-effort CLOSE to transport then receiver.
 	if transportID != "" {
+		c.log.Debug("sending CLOSE to transport", "transportID", transportID)
 		_ = c.sendJSON(transportID, nsConnection, `{"type":"CLOSE"}`)
 	}
+	c.log.Debug("sending CLOSE to platform receiver")
 	_ = c.sendJSON(platformReceiverID, nsConnection, `{"type":"CLOSE"}`)
 
-	c.cancel()
-	<-c.done // wait for readLoop to exit
+	// Close the TCP connection first so the blocking Recv() in readLoop
+	// returns an error, then cancel the context and wait for readLoop to exit.
+	c.log.Debug("closing TCP connection to unblock readLoop")
 	_ = c.conn.Close()
+	c.log.Debug("cancelling context, waiting for readLoop to exit")
+	c.cancel()
+	<-c.done
+	c.log.Info("client closed")
 }
 
 // --- internal ---
@@ -242,14 +288,14 @@ func (c *Client) sendConnect(destID string) error {
 	return c.sendJSON(destID, nsConnection, `{"type":"CONNECT"}`)
 }
 
-func (c *Client) sendJSON(destID, namespace, payload string) error {
+func (c *Client) sendJSON(destID, namespace, payloadStr string) error {
 	msg := &pb.CastMessage{
-		ProtocolVersion: pb.CastMessage_PROTOCOL_VERSION_CASTV2_1_0,
-		SourceId:        "sender-0",
-		DestinationId:   destID,
-		Namespace:       namespace,
-		PayloadType:     pb.CastMessage_PAYLOAD_TYPE_STRING,
-		PayloadUtf8:     payload,
+		ProtocolVersion: pb.CastMessage_CASTV2_1_0.Enum(),
+		SourceId:        proto.String("sender-0"),
+		DestinationId:   proto.String(destID),
+		Namespace:       proto.String(namespace),
+		PayloadType:     pb.CastMessage_STRING.Enum(),
+		PayloadUtf8:     proto.String(payloadStr),
 	}
 	return c.conn.Send(msg)
 }
@@ -263,13 +309,17 @@ func (c *Client) sendMediaCommand(ctx context.Context, cmdType string) error {
 	reqID := c.allocReqID()
 	payload := fmt.Sprintf(`{"type":"%s","mediaSessionId":%d,"requestId":%d}`, cmdType, msID, reqID)
 
+	c.log.Info("sending media command", "type", cmdType, "reqID", reqID, "mediaSessionID", msID, "transportID", transportID)
 	if err := c.sendJSON(transportID, nsMedia, payload); err != nil {
 		return fmt.Errorf("send %s: %w", cmdType, err)
 	}
 
+	c.log.Info("waiting for media command response", "type", cmdType, "reqID", reqID)
 	if _, err := c.waitResponse(ctx, reqID); err != nil {
+		c.log.Error("media command response failed", "type", cmdType, "reqID", reqID, "error", err)
 		return fmt.Errorf("%s response: %w", cmdType, err)
 	}
+	c.log.Info("media command succeeded", "type", cmdType, "reqID", reqID)
 	return nil
 }
 
@@ -289,6 +339,8 @@ func (c *Client) waitResponse(ctx context.Context, reqID int) (json.RawMessage, 
 	select {
 	case resp := <-ch:
 		return resp, nil
+	case <-c.done:
+		return nil, fmt.Errorf("connection closed")
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -317,6 +369,10 @@ func (c *Client) readLoop(ctx context.Context) {
 
 		ns := msg.GetNamespace()
 		payload := msg.GetPayloadUtf8()
+		src := msg.GetSourceId()
+		dst := msg.GetDestinationId()
+
+		c.log.Debug("recv", "ns", ns, "src", src, "dst", dst, "payload", payload)
 
 		switch ns {
 		case nsHeartbeat:
@@ -327,21 +383,34 @@ func (c *Client) readLoop(ctx context.Context) {
 			}
 
 		case nsConnection:
-			// CLOSE from device — log and continue; the controller will
-			// detect the failure via status polling.
-			c.log.Debug("connection message", "payload", payload)
+			var cm struct{ Type string }
+			if json.Unmarshal([]byte(payload), &cm) == nil && cm.Type == "CLOSE" {
+				// Device resets the virtual connection during LAUNCH;
+				// re-send CONNECT so it keeps talking to us.
+				c.log.Info("received CLOSE from device, re-sending CONNECT", "src", src)
+				if err := c.sendConnect(platformReceiverID); err != nil {
+					c.log.Error("re-connect after CLOSE failed", "error", err)
+					return
+				}
+				continue
+			}
+			c.log.Info("connection message from device", "src", src, "payload", payload)
 
 		default:
 			// Dispatch by requestId to any waiting caller.
 			var envelope struct {
-				RequestID int `json:"requestId"`
+				RequestID int    `json:"requestId"`
+				Type      string `json:"type"`
 			}
 			if json.Unmarshal([]byte(payload), &envelope) == nil && envelope.RequestID > 0 {
+				c.log.Debug("dispatching response", "reqID", envelope.RequestID, "type", envelope.Type)
 				c.mu.Lock()
 				ch, ok := c.pending[envelope.RequestID]
 				c.mu.Unlock()
 				if ok {
 					ch <- json.RawMessage(payload)
+				} else {
+					c.log.Debug("no pending handler for response", "reqID", envelope.RequestID)
 				}
 			}
 		}

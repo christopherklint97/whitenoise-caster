@@ -73,10 +73,16 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 	c.client = client
 
 	if err := c.loadMedia(ctx); err != nil {
+		_ = c.client.SetMuted(ctx, false)
 		c.client.Close()
 		c.client = nil
 		c.status = Status{State: StateError, Error: fmt.Sprintf("load: %v", err)}
 		return fmt.Errorf("loading media: %w", err)
+	}
+
+	// Unmute now that the launch chime has passed.
+	if err := c.client.SetMuted(ctx, false); err != nil {
+		c.log.Warn("failed to unmute after launch", "error", err)
 	}
 
 	c.status = Status{
@@ -103,7 +109,13 @@ func (c *Controller) connectAndLaunch(ctx context.Context, ip string) (*Client, 
 		return nil, err
 	}
 
+	// Mute to suppress the launch chime.
+	if err := client.SetMuted(connCtx, true); err != nil {
+		c.log.Warn("failed to mute before launch", "error", err)
+	}
+
 	if err := client.LaunchMediaReceiver(connCtx); err != nil {
+		_ = client.SetMuted(connCtx, false)
 		client.Close()
 		return nil, fmt.Errorf("launch media receiver: %w", err)
 	}
@@ -301,6 +313,7 @@ func (c *Controller) reconnect(ctx context.Context, speakerIP, speakerName strin
 
 	if err := c.loadMedia(loadCtx); err != nil {
 		c.log.Error("reconnect load failed", "error", err)
+		_ = c.client.SetMuted(loadCtx, false)
 		c.status = Status{
 			State:       StateError,
 			SpeakerIP:   speakerIP,
@@ -308,6 +321,11 @@ func (c *Controller) reconnect(ctx context.Context, speakerIP, speakerName strin
 			Error:       fmt.Sprintf("reconnect load: %v", err),
 		}
 		return
+	}
+
+	// Unmute now that the launch chime has passed.
+	if err := c.client.SetMuted(loadCtx, false); err != nil {
+		c.log.Warn("failed to unmute after reconnect", "error", err)
 	}
 
 	c.status = Status{
