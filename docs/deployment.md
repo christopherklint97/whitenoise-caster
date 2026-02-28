@@ -10,10 +10,10 @@ Whitenoise Caster runs on a Hetzner VPS and reaches Chromecasts on a home LAN th
 │  (OpenVPN client)    │       10.8.0.x             │  (OpenVPN server)     │
 │                      │                             │                       │
 │  Docker (host net):  │                             │  Home LAN:            │
-│  - app    (:8080)    │─── TCP 8009 ──────────────►│  - Living Room        │
-│  - caddy  (:80/443)  │    via 192.168.1.x         │    192.168.1.100       │
-│                      │                             │  - Bedroom            │
-│                      │◄── HTTPS audio fetch ──────│    192.168.1.101      │
+│  - app    (:8080)    │─── TCP 8009 ──────────────►│  - Speaker A          │
+│  - caddy  (:80/443)  │    via 192.168.0.x         │    192.168.0.x        │
+│                      │                             │  - Speaker B          │
+│                      │◄── HTTPS audio fetch ──────│    192.168.0.x        │
 └──────────────────────┘                             └───────────────────────┘
          ▲
          │ HTTPS
@@ -26,14 +26,44 @@ Whitenoise Caster runs on a Hetzner VPS and reaches Chromecasts on a home LAN th
 ## Prerequisites
 
 - Hetzner VPS (any plan with a public IPv4)
-- Domain: `noise.example.com` with DNS managed somewhere you can add an A record
+- Domain with DNS managed somewhere you can add an A record
 - TP-Link Archer AX1800 (v1.2) with latest firmware
+- **A public IP from your ISP** (not behind CGNAT — see below)
 - A `whitenoise.mp3` audio file
 - SSH access to the VPS
 
-## Step 1: Configure OpenVPN Server on the Router
+### CGNAT Check (Important)
 
-1. Open the router admin panel at `http://tplinkwifi.net` or `http://192.168.1.1`
+The VPS connects **inbound** to the router's OpenVPN server. This requires your home router to have a real public IP. Many ISPs use Carrier-Grade NAT (CGNAT), which makes inbound connections impossible.
+
+**To check if you're behind CGNAT:**
+
+1. Log in to the router admin panel at `http://192.168.0.1`
+2. Go to **Network > Internet** and note the **IP Address** (WAN IP)
+3. From a device on your home WiFi, visit `https://ifconfig.me` and note the public IP
+
+If the WAN IP and public IP **match** — you have a real public IP. You're good.
+
+If the WAN IP is **different** (typically in the `100.64.0.0/10` range, e.g. `100.x.x.x`) — you're behind CGNAT. Contact your ISP and request a public IP address. Some ISPs provide this for free, others charge a small fee. Without a public IP, the VPS cannot reach the router's VPN server.
+
+## Step 1: Configure Dynamic DNS on the Router
+
+If your ISP assigns a dynamic public IP (most do), set up DDNS so the VPS can always find the router:
+
+1. On the router, go to **Advanced > Network > Dynamic DNS**
+2. TP-Link provides a free built-in DDNS service — register a hostname (e.g. `myhome.tplinkdns.com`)
+3. Enable the DDNS entry and save
+
+Verify from any machine:
+
+```bash
+dig +short myhome.tplinkdns.com
+# Should return your home public IP
+```
+
+## Step 2: Configure OpenVPN Server on the Router
+
+1. Open the router admin panel at `http://192.168.0.1`
 2. Log in with your TP-Link ID or router password
 3. Navigate to **Advanced > VPN Server > OpenVPN**
 4. Check **Enable VPN Server**
@@ -46,16 +76,21 @@ Whitenoise Caster runs on a Hetzner VPS and reaches Chromecasts on a home LAN th
 
 The exported `.ovpn` file contains the server address, certificates, and keys needed for the VPS to connect.
 
-### Dynamic DNS (if your home IP changes)
+**Edit the exported `.ovpn` file:** Replace the IP in the `remote` line with your DDNS hostname:
 
-If your ISP assigns a dynamic public IP:
+```
+remote myhome.tplinkdns.com 1194
+```
 
-1. On the router, go to **Advanced > Network > Dynamic DNS**
-2. Register with a supported DDNS provider (No-IP, DynDNS, etc.)
-3. Configure it on the router so the hostname always resolves to your current home IP
-4. Edit the exported `.ovpn` file and replace the IP in the `remote` line with your DDNS hostname
+### If port 1194 is blocked
 
-## Step 2: Provision the Hetzner VPS
+Some ISPs block well-known VPN ports. If the VPS can't connect on 1194:
+
+1. Try a different port on the router (e.g. `51194`) — the Archer restricts ports to 1024-65535
+2. Test reachability from the VPS: `nmap -Pn -sU -p 51194 myhome.tplinkdns.com`
+3. Update both the router's Service Port and the `remote` line in the `.ovpn` file
+
+## Step 3: Provision the Hetzner VPS
 
 ### System setup
 
@@ -87,7 +122,7 @@ ufw enable
 
 No inbound VPN port is needed on the VPS since it acts as the OpenVPN **client** connecting outbound to the router.
 
-## Step 3: Install OpenVPN Client on the VPS
+## Step 4: Install OpenVPN Client on the VPS
 
 1. Copy the `.ovpn` file exported from the router to the VPS:
 
@@ -109,16 +144,13 @@ systemctl enable --now openvpn@client
 # Check the tunnel interface exists
 ip addr show tun0
 
-# Ping a Chromecast through the tunnel
-ping -c 3 192.168.1.100
+# Ping the router's LAN IP through the tunnel
+ping -c 3 192.168.0.1
 ```
 
-If the ping succeeds, your VPS can reach your home LAN. If it fails, check:
-- Router firewall / VPN server status
-- Whether your home router's public IP or DDNS hostname is correct in the `.ovpn` file
-- `journalctl -u openvpn@client` for connection errors
+If the ping succeeds, your VPS can reach your home LAN. If it fails, see the Troubleshooting section below.
 
-## Step 4: DNS Record
+## Step 5: DNS Record
 
 Add an A record for your domain pointing to the Hetzner VPS public IP:
 
@@ -126,7 +158,7 @@ Add an A record for your domain pointing to the Hetzner VPS public IP:
 noise.example.com  →  A  →  <VPS_PUBLIC_IP>
 ```
 
-Set this up wherever you manage DNS for `example.com`. TTL of 300 (5 min) is fine.
+Set this up wherever you manage DNS. TTL of 300 (5 min) is fine.
 
 Verify:
 
@@ -135,7 +167,7 @@ dig +short noise.example.com
 # Should return your VPS IP
 ```
 
-## Step 5: Deploy the Application
+## Step 6: Deploy the Application
 
 ### Clone the repo
 
@@ -160,7 +192,7 @@ cp config.example.yaml config.prod.yaml
 nano config.prod.yaml
 ```
 
-Fill in your real speaker IPs, set `audio_url` to your real domain (`https://your-domain.com`), and set `auth.username` / `auth.password`.
+Fill in your real speaker IPs (on the `192.168.0.x` subnet), set `audio_url` to your real domain, and set `auth.username` / `auth.password`.
 
 ```bash
 cp Caddyfile Caddyfile.prod
@@ -210,9 +242,9 @@ When you hit "Play" in the web UI:
 
 1. Your phone sends `POST /api/play` to `noise.example.com` (Hetzner VPS)
 2. Caddy terminates TLS and proxies to the app on `localhost:8080`
-3. The app connects to the Chromecast at `192.168.1.100:8009` through the OpenVPN tunnel (`tun0`)
+3. The app connects to the Chromecast at `192.168.0.x:8009` through the OpenVPN tunnel (`tun0`)
 4. The app tells the Chromecast to load audio from `https://noise.example.com/audio/<secret>/whitenoise.mp3`
-5. The Chromecast fetches the audio over the public internet (Chromecast → Google DNS → your VPS)
+5. The Chromecast fetches the audio over the public internet (Chromecast -> Google DNS -> your VPS)
 6. The app's monitor loop polls the Chromecast every 3s and re-loads the track when it finishes (looping)
 
 ## Maintenance
@@ -243,7 +275,7 @@ systemctl status openvpn@client
 ip addr show tun0
 
 # Test connectivity to home LAN
-ping 192.168.1.100
+ping 192.168.0.1
 ```
 
 ### Viewing logs
@@ -258,15 +290,75 @@ journalctl -u openvpn@client -f
 
 ## Troubleshooting
 
+### VPN tunnel won't connect
+
+**Check the basics:**
+
+```bash
+# On the VPS — check OpenVPN client status
+systemctl status openvpn@client
+journalctl -u openvpn@client -n 50 --no-pager
+
+# Verify the TUN kernel module is loaded
+lsmod | grep tun
+# If empty: sudo modprobe tun
+```
+
+**TLS handshake timeout (most common issue):**
+
+If you see `TLS Error: TLS key negotiation failed to occur within 60 seconds`, the VPS cannot reach the router's OpenVPN server. Check in this order:
+
+1. **CGNAT** — Verify you have a real public IP (see CGNAT Check above). This is the most common cause. If your router's WAN IP is in `100.64.0.0/10`, no inbound connections will work.
+
+2. **DDNS stale** — Check that your DDNS hostname resolves to your actual public IP:
+   ```bash
+   dig +short myhome.tplinkdns.com
+   ```
+   Compare with your actual IP at `https://ifconfig.me` from your home network.
+
+3. **OpenVPN server down on router** — Log in to the router admin panel and check **Advanced > VPN Server > OpenVPN** is enabled. Toggle it off and on if needed. Try rebooting the router.
+
+4. **Port blocked by ISP** — Test reachability from the VPS:
+   ```bash
+   nmap -Pn -sU -p 1194 myhome.tplinkdns.com
+   ```
+   If closed, try a different port (see "If port 1194 is blocked" above).
+
+5. **Test from LAN** — Install the OpenVPN Connect app on your phone, import the `.ovpn` config with `remote 192.168.0.1 1194`, and test from your home WiFi. If this works but the VPS can't connect, the issue is between the internet and your router (CGNAT, ISP firewall, or port blocking).
+
+**VPN connected but `tun0` missing:**
+
+```bash
+# Check all tunnel interfaces
+ip addr | grep -E "tun|tap"
+
+# Ensure TUN module is loaded
+sudo modprobe tun
+sudo systemctl restart openvpn@client
+```
+
+### Other issues
+
 | Symptom | Check |
 |---------|-------|
-| Can't reach Chromecasts | `ping 192.168.1.100` — is the VPN tunnel up? Check `systemctl status openvpn@client` |
 | VPN connects but no LAN access | Router VPN setting must be "Home Network Only" or "Internet and Home Network" — verify client access mode |
 | Chromecast can't fetch audio | The audio URL must be publicly reachable. Test: `curl https://noise.example.com/audio/<secret>/whitenoise.mp3 -I` from any network |
-| Caddy won't start | Port 80 or 443 already in use? Check with `ss -tlnp | grep -E ':80|:443'` |
+| Caddy won't start | Port 80 or 443 already in use? Check with `ss -tlnp | grep -E ':80\|:443'` |
 | TLS cert fails | DNS must be propagated. Check: `dig +short noise.example.com`. Caddy needs port 80 open for the ACME HTTP challenge |
-| Connection timeouts after home IP change | Set up DDNS on the router and use the DDNS hostname in the `.ovpn` config |
 | App starts but "connect: connection refused" | Chromecast may be off or on a different IP. Verify IPs in `config.yaml` match actual devices |
+
+### VPS firewall reference
+
+The VPS only needs these ports open:
+
+```bash
+ufw status
+# 22/tcp   — SSH
+# 80/tcp   — HTTP (Caddy ACME + redirect)
+# 443/tcp  — HTTPS
+```
+
+No inbound VPN port is needed. The VPS connects **outbound** to the router as an OpenVPN client. UFW's default rules allow established/related return traffic.
 
 ## Security Notes
 
@@ -275,3 +367,4 @@ journalctl -u openvpn@client -f
 - Caddy enforces HTTPS with automatic certificate management.
 - The OpenVPN tunnel encrypts all traffic between the VPS and your home network.
 - `config.prod.yaml` is gitignored. Never commit files containing credentials. Use `config.example.yaml` as a template.
+- The router's SPI Firewall should remain enabled. "Respond to Pings from WAN" can stay disabled — it's not needed for OpenVPN.
