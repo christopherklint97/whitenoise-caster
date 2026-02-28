@@ -125,9 +125,9 @@ func (c *Controller) connectAndLaunch(ctx context.Context, ip string) (*Client, 
 
 func (c *Controller) Pause() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.client == nil {
+		c.mu.Unlock()
 		return fmt.Errorf("not connected")
 	}
 
@@ -138,22 +138,36 @@ func (c *Controller) Pause() error {
 	case StatePlaying:
 		c.log.Info("pausing playback", "speaker", c.status.SpeakerName)
 		if err := c.client.Pause(ctx); err != nil {
+			c.mu.Unlock()
 			return fmt.Errorf("pausing: %w", err)
 		}
 		c.status.State = StatePaused
 		c.log.Info("paused")
+		c.mu.Unlock()
+		return nil
 	case StatePaused:
-		c.log.Info("resuming playback", "speaker", c.status.SpeakerName)
+		speakerIP := c.status.SpeakerIP
+		speakerName := c.status.SpeakerName
+		c.log.Info("resuming playback", "speaker", speakerName)
 		if err := c.client.Play(ctx); err != nil {
-			return fmt.Errorf("resuming: %w", err)
+			// Session is stale (e.g., device killed the app during idle).
+			// Clean up and start a fresh session to the same speaker.
+			c.log.Warn("resume failed, attempting fresh play", "error", err)
+			c.stopLocked()
+			c.mu.Unlock()
+			playCtx, playCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer playCancel()
+			return c.Play(playCtx, speakerIP, speakerName)
 		}
 		c.status.State = StatePlaying
 		c.log.Info("resumed")
+		c.mu.Unlock()
+		return nil
 	default:
-		return fmt.Errorf("cannot toggle pause in state: %s", c.status.State)
+		state := c.status.State
+		c.mu.Unlock()
+		return fmt.Errorf("cannot toggle pause in state: %s", state)
 	}
-
-	return nil
 }
 
 func (c *Controller) Stop() error {

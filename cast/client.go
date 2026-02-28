@@ -385,7 +385,20 @@ func (c *Client) readLoop(ctx context.Context) {
 		case nsConnection:
 			var cm struct{ Type string }
 			if json.Unmarshal([]byte(payload), &cm) == nil && cm.Type == "CLOSE" {
-				// Device resets the virtual connection during LAUNCH;
+				c.mu.Lock()
+				isTransportClose := c.transportID != "" && src == c.transportID
+				c.mu.Unlock()
+
+				if isTransportClose {
+					// The media receiver app was killed by the device (idle timeout).
+					// The session is dead — close the connection so the controller
+					// can detect it and recover on the next interaction.
+					c.log.Info("transport closed by device, session is dead", "src", src)
+					_ = c.conn.Close()
+					return
+				}
+
+				// Platform-level CLOSE (e.g., device resets during LAUNCH);
 				// re-send CONNECT so it keeps talking to us.
 				c.log.Info("received CLOSE from device, re-sending CONNECT", "src", src)
 				if err := c.sendConnect(platformReceiverID); err != nil {
