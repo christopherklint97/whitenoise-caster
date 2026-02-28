@@ -11,7 +11,7 @@ audio_file: "whitenoise.mp3"
 
 # Public base URL where the Chromecast can reach this server
 # The Chromecast will fetch: {audio_url}/audio/{secret_path}/whitenoise.mp3
-audio_url: "https://noise.example.com"
+audio_url: "http://192.168.1.1:8080"
 
 # Address to listen on
 listen_addr: ":8080"

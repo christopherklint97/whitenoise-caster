@@ -1,7 +1,7 @@
 # Whitenoise Caster
 
 ## Project Overview
-Go service that casts looped white noise to Chromecast/Google Home speakers via a mobile-first web UI. Runs on a Hetzner VPS, reaches Chromecasts through a WireGuard tunnel. Audio served publicly via HTTPS.
+Go service that casts looped white noise to Chromecast/Google Home speakers via a mobile-first web UI. Runs on a Hetzner VPS, reaches Chromecasts through an OpenVPN tunnel to an Archer AX1800 router (v1.2). Audio served publicly via HTTPS.
 
 ## Tech Stack
 - **Language**: Go 1.25+
@@ -19,12 +19,16 @@ handlers/api.go      — HTTP routes (Go 1.22+ ServeMux pattern routing)
 handlers/api_test.go — unit tests (function-level mocks, httptest.NewRecorder)
 handlers/e2e_test.go — E2E tests (stateful mock, httptest.NewServer, real web files)
 web/                 — embedded static files (index.html, manifest.json, icon.png)
-config.yaml          — example configuration
-Dockerfile           — multi-stage build
-docker-compose.yml   — app + caddy services
-Caddyfile            — reverse proxy config
-Makefile             — build targets
-.github/workflows/   — CI (vet + test on push/PR to main)
+config.example.yaml       — example configuration (committed)
+config.prod.yaml          — production config with credentials (gitignored)
+Dockerfile                — multi-stage build
+docker-compose.yml        — dev: app + caddy with Docker networks
+docker-compose.prod.yml   — prod: host networking for OpenVPN tunnel access
+Caddyfile                 — dev reverse proxy config (example domain)
+Caddyfile.prod            — prod reverse proxy with real domain (gitignored)
+Makefile                  — build targets (deploy-prod for production)
+docs/deployment.md        — full deployment guide
+.github/workflows/        — CI (vet + test on push/PR to main)
 ```
 
 ## Key Patterns
@@ -51,7 +55,8 @@ app.Status() (*cast.Application, *cast.Media, *cast.Volume)
 - `make vet` — lint
 - `make run` — build and run with config.yaml
 - `make dev` — hot-reload with air
-- `make docker-up` — docker compose up
+- `make docker-up` — docker compose up (dev)
+- `make deploy-prod` — docker compose up with production config
 
 ## Style
 - Use log/slog for structured logging

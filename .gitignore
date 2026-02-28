@@ -16,5 +16,9 @@ tmp/
 # Environment
 .env
 
-# Local config (use config.example.yaml as a template)
+# Local/production config (use config.example.yaml as a template)
 config.yaml
+config.prod.yaml
+
+# Production Caddyfile (use Caddyfile as a template)
+Caddyfile.prod

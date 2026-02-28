@@ -1,4 +1,4 @@
-.PHONY: build run dev clean docker-build docker-up deploy test vet
+.PHONY: build run dev clean docker-build docker-up docker-down deploy deploy-prod test vet
 
 BINARY := whitenoise-caster
 
@@ -26,6 +26,9 @@ docker-down:
 
 deploy: docker-build
 	docker compose up -d --build
+
+deploy-prod:
+	docker compose -f docker-compose.prod.yml up -d --build
 
 test:
 	go test ./... -count=1
