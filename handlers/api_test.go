@@ -274,6 +274,65 @@ func TestHandlePlay(t *testing.T) {
 	})
 }
 
+func TestHandlePlay_SwitchSpeaker(t *testing.T) {
+	var calls []struct{ ip, name string }
+	mock := &mockCaster{
+		playFunc: func(_ context.Context, ip, name string) error {
+			calls = append(calls, struct{ ip, name string }{ip, name})
+			return nil
+		},
+		status: cast.Status{
+			State:       cast.StatePlaying,
+			SpeakerIP:   "192.168.1.101",
+			SpeakerName: "Bedroom",
+		},
+	}
+	mux := setupHandler(t, mock, nil)
+
+	// Play on Bedroom first
+	body := `{"speaker_ip":"192.168.1.101"}`
+	req := httptest.NewRequest("POST", "/api/play", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Switch to Living Room
+	mock.status = cast.Status{
+		State:       cast.StatePlaying,
+		SpeakerIP:   "192.168.1.100",
+		SpeakerName: "Living Room",
+	}
+	body = `{"speaker_ip":"192.168.1.100"}`
+	req = httptest.NewRequest("POST", "/api/play", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify Play was called twice with different speakers
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 Play calls, got %d", len(calls))
+	}
+	if calls[0].name != "Bedroom" {
+		t.Errorf("first call: want Bedroom, got %s", calls[0].name)
+	}
+	if calls[1].name != "Living Room" {
+		t.Errorf("second call: want Living Room, got %s", calls[1].name)
+	}
+
+	// Verify the response shows new speaker
+	var got cast.Status
+	json.NewDecoder(w.Body).Decode(&got)
+	if got.SpeakerName != "Living Room" {
+		t.Errorf("response speaker_name: want Living Room, got %s", got.SpeakerName)
+	}
+}
+
 func TestHandlePause(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		pauseCalled := false

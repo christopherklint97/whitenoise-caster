@@ -63,6 +63,7 @@ const pauseIcon = document.getElementById('pauseIcon');
 const stopIcon = document.getElementById('stopIcon');
 
 let currentState = 'disconnected';
+let activeSpeakerIP = '';
 
 function showIcon(state) {
   playIcon.style.display = 'none';
@@ -75,6 +76,7 @@ function showIcon(state) {
 
 function updateUI(data) {
   currentState = data.state;
+  activeSpeakerIP = data.speaker_ip || '';
   btn.className = 'play-btn' + (data.state !== 'disconnected' ? ' ' + data.state : '');
   showIcon(data.state);
 
@@ -118,7 +120,10 @@ async function pollStatus() {
 btn.addEventListener('click', async () => {
   if (currentState === 'connecting') return;
 
-  if (currentState === 'playing' || currentState === 'paused') {
+  const selectedIP = speakerSel.value;
+
+  // If playing/paused on the same speaker, toggle pause
+  if ((currentState === 'playing' || currentState === 'paused') && selectedIP === activeSpeakerIP) {
     try {
       await fetch('/api/pause', { method: 'POST' });
       pollStatus();
@@ -126,10 +131,9 @@ btn.addEventListener('click', async () => {
     return;
   }
 
-  // Start playback
-  const ip = speakerSel.value;
-  if (!ip) return;
-  localStorage.setItem('lastSpeaker', ip);
+  // Start playback (new speaker selected, or not currently playing)
+  if (!selectedIP) return;
+  localStorage.setItem('lastSpeaker', selectedIP);
 
   try {
     statusEl.textContent = 'Connecting...';
@@ -137,7 +141,7 @@ btn.addEventListener('click', async () => {
     const res = await fetch('/api/play', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speaker_ip: ip })
+      body: JSON.stringify({ speaker_ip: selectedIP })
     });
     if (!res.ok) {
       const err = await res.json();

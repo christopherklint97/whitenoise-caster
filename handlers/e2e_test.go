@@ -497,6 +497,77 @@ func TestE2E_Volume(t *testing.T) {
 	})
 }
 
+func TestE2E_SwitchSpeakerWhilePlaying(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Play on Bedroom
+	resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.101"})
+	s := decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after play: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Bedroom" {
+		t.Fatalf("speaker_name: want Bedroom, got %s", s.SpeakerName)
+	}
+	if s.SpeakerIP != "192.168.1.101" {
+		t.Fatalf("speaker_ip: want 192.168.1.101, got %s", s.SpeakerIP)
+	}
+
+	// Switch to Living Room by calling play with a different speaker
+	resp = env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after switch: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("after switch speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+	if s.SpeakerIP != "192.168.1.100" {
+		t.Fatalf("after switch speaker_ip: want 192.168.1.100, got %s", s.SpeakerIP)
+	}
+
+	// Status confirms the new speaker
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("status after switch: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("status speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+}
+
+func TestE2E_SwitchSpeakerWhilePaused(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Play on Bedroom
+	resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.101"})
+	resp.Body.Close()
+
+	// Pause
+	resp = env.postEmpty(t, "/api/pause")
+	s := decodeStatus(t, resp)
+	if s.State != cast.StatePaused {
+		t.Fatalf("after pause: want paused, got %s", s.State)
+	}
+	if s.SpeakerName != "Bedroom" {
+		t.Fatalf("paused speaker_name: want Bedroom, got %s", s.SpeakerName)
+	}
+
+	// Switch to Living Room (play on new speaker while paused on old one)
+	resp = env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	s = decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after switch from paused: want playing, got %s", s.State)
+	}
+	if s.SpeakerName != "Living Room" {
+		t.Fatalf("after switch speaker_name: want Living Room, got %s", s.SpeakerName)
+	}
+	if s.SpeakerIP != "192.168.1.100" {
+		t.Fatalf("after switch speaker_ip: want 192.168.1.100, got %s", s.SpeakerIP)
+	}
+}
+
 func TestE2E_AuthRequired(t *testing.T) {
 	env := setupE2E(t, "admin", "secret")
 
