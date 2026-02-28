@@ -35,6 +35,7 @@ type Controller struct {
 	app        *application.Application
 	status     Status
 	cancelLoop context.CancelFunc
+	volume     float32 // last user-set volume (for unmute on resume)
 }
 
 func NewController(logger *slog.Logger, audioURL string) *Controller {
@@ -134,15 +135,21 @@ func (c *Controller) Pause() error {
 
 	switch c.status.State {
 	case StatePlaying:
-		c.log.Info("pausing playback", "speaker", c.status.SpeakerName)
-		if err := c.app.Pause(); err != nil {
-			return fmt.Errorf("pausing: %w", err)
+		c.log.Info("pausing playback via mute", "speaker", c.status.SpeakerName)
+		if err := c.app.SetMuted(true); err != nil {
+			return fmt.Errorf("muting: %w", err)
 		}
 		c.status.State = StatePaused
-		c.log.Info("paused")
+		c.log.Info("paused (muted)")
 	case StatePaused:
-		// Always restart from the beginning.
-		c.log.Info("resuming: loading media from start", "speaker", c.status.SpeakerName)
+		c.log.Info("resuming: unmuting and reloading from start", "speaker", c.status.SpeakerName)
+		if err := c.app.SetMuted(false); err != nil {
+			return fmt.Errorf("unmuting: %w", err)
+		}
+		// Restore volume since SetMuted sends level=0.
+		if c.volume > 0 {
+			_ = c.app.SetVolume(c.volume)
+		}
 		if err := c.loadMedia(); err != nil {
 			return fmt.Errorf("resuming: %w", err)
 		}
@@ -174,8 +181,7 @@ func (c *Controller) stopLocked() {
 		c.cancelLoop = nil
 	}
 	if c.app != nil {
-		_ = c.app.StopMedia()
-		_ = c.app.Close(false)
+		_ = c.app.Close(true)
 		c.app = nil
 	}
 	c.status = Status{State: StateDisconnected}
@@ -199,6 +205,7 @@ func (c *Controller) SetVolume(level float32) error {
 		return fmt.Errorf("setting volume: %w", err)
 	}
 
+	c.volume = level
 	c.log.Info("volume set", "level", level)
 	return nil
 }
