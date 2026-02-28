@@ -1,0 +1,34 @@
+// Minimal CastMessage definition from Chromium's cast_channel.proto.
+// Only includes what we need — no AuthChallenge/AuthResponse/DeviceAuthMessage.
+
+syntax = "proto3";
+
+package cast.proto.v1;
+
+option go_package = "github.com/telnesstech/whitenoise-caster/cast/proto/v1";
+
+message CastMessage {
+  enum ProtocolVersion {
+    // buf:lint:ignore ENUM_VALUE_PREFIX
+    // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+    CASTV2_1_0 = 0;
+  }
+  ProtocolVersion protocol_version = 1;
+
+  string source_id = 2;
+  string destination_id = 3;
+  string namespace = 4;
+
+  enum PayloadType {
+    // buf:lint:ignore ENUM_VALUE_PREFIX
+    // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+    STRING = 0;
+    // buf:lint:ignore ENUM_VALUE_PREFIX
+    // buf:lint:ignore ENUM_ZERO_VALUE_SUFFIX
+    BINARY = 1;
+  }
+  PayloadType payload_type = 5;
+
+  optional string payload_utf8 = 6;
+  optional bytes payload_binary = 7;
+}

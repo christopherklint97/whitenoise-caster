@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/vishen/go-chromecast/application"
 )
 
 type State string
@@ -32,10 +30,9 @@ type Controller struct {
 	log      *slog.Logger
 	audioURL string
 
-	app        *application.Application
+	client     *Client
 	status     Status
 	cancelLoop context.CancelFunc
-	volume     float32 // last user-set volume (for unmute on resume)
 }
 
 func NewController(logger *slog.Logger, audioURL string) *Controller {
@@ -61,17 +58,17 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 		SpeakerName: speakerName,
 	}
 
-	app, err := connectWithTimeout(speakerIP, 8009, connectTimeout)
+	client, err := c.connectAndLaunch(ctx, speakerIP)
 	if err != nil {
 		c.status = Status{State: StateError, Error: fmt.Sprintf("connect: %v", err)}
 		return fmt.Errorf("connecting to %s (%s): %w", speakerName, speakerIP, err)
 	}
 
-	c.app = app
+	c.client = client
 
-	if err := c.loadMedia(); err != nil {
-		_ = c.app.Close(false)
-		c.app = nil
+	if err := c.loadMedia(ctx); err != nil {
+		c.client.Close()
+		c.client = nil
 		c.status = Status{State: StateError, Error: fmt.Sprintf("load: %v", err)}
 		return fmt.Errorf("loading media: %w", err)
 	}
@@ -91,66 +88,45 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 	return nil
 }
 
-// connectWithTimeout attempts app.Start in a goroutine and returns after timeout.
-// If the goroutine eventually connects after the timeout, it closes the connection.
-func connectWithTimeout(ip string, port int, timeout time.Duration) (*application.Application, error) {
-	type result struct {
-		app *application.Application
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		a := application.NewApplication(
-			application.WithDebug(false),
-			application.WithCacheDisabled(true),
-		)
-		err := a.Start(ip, port)
-		ch <- result{a, err}
-	}()
+func (c *Controller) connectAndLaunch(ctx context.Context, ip string) (*Client, error) {
+	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
 
-	select {
-	case res := <-ch:
-		if res.err != nil {
-			return nil, res.err
-		}
-		return res.app, nil
-	case <-time.After(timeout):
-		// Goroutine may still be running; close its app if it eventually connects.
-		go func() {
-			if res := <-ch; res.err == nil {
-				_ = res.app.Close(false)
-			}
-		}()
-		return nil, fmt.Errorf("connection timed out after %v", timeout)
+	client, err := Connect(connCtx, ip, 8009, connectTimeout, c.log)
+	if err != nil {
+		return nil, err
 	}
+
+	if err := client.LaunchMediaReceiver(connCtx); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("launch media receiver: %w", err)
+	}
+
+	return client, nil
 }
 
 func (c *Controller) Pause() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.app == nil {
+	if c.client == nil {
 		return fmt.Errorf("not connected")
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	switch c.status.State {
 	case StatePlaying:
-		c.log.Info("pausing playback via mute", "speaker", c.status.SpeakerName)
-		if err := c.app.SetMuted(true); err != nil {
-			return fmt.Errorf("muting: %w", err)
+		c.log.Info("pausing playback", "speaker", c.status.SpeakerName)
+		if err := c.client.Pause(ctx); err != nil {
+			return fmt.Errorf("pausing: %w", err)
 		}
 		c.status.State = StatePaused
-		c.log.Info("paused (muted)")
+		c.log.Info("paused")
 	case StatePaused:
-		c.log.Info("resuming: unmuting and reloading from start", "speaker", c.status.SpeakerName)
-		if err := c.app.SetMuted(false); err != nil {
-			return fmt.Errorf("unmuting: %w", err)
-		}
-		// Restore volume since SetMuted sends level=0.
-		if c.volume > 0 {
-			_ = c.app.SetVolume(c.volume)
-		}
-		if err := c.loadMedia(); err != nil {
+		c.log.Info("resuming playback", "speaker", c.status.SpeakerName)
+		if err := c.client.Play(ctx); err != nil {
 			return fmt.Errorf("resuming: %w", err)
 		}
 		c.status.State = StatePlaying
@@ -166,7 +142,7 @@ func (c *Controller) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.app == nil {
+	if c.client == nil {
 		return nil
 	}
 
@@ -180,9 +156,9 @@ func (c *Controller) stopLocked() {
 		c.cancelLoop()
 		c.cancelLoop = nil
 	}
-	if c.app != nil {
-		_ = c.app.Close(true)
-		c.app = nil
+	if c.client != nil {
+		c.client.Close()
+		c.client = nil
 	}
 	c.status = Status{State: StateDisconnected}
 }
@@ -197,15 +173,17 @@ func (c *Controller) SetVolume(level float32) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.app == nil {
+	if c.client == nil {
 		return fmt.Errorf("not connected")
 	}
 
-	if err := c.app.SetVolume(level); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := c.client.SetVolume(ctx, level); err != nil {
 		return fmt.Errorf("setting volume: %w", err)
 	}
 
-	c.volume = level
 	c.log.Info("volume set", "level", level)
 	return nil
 }
@@ -216,8 +194,8 @@ func (c *Controller) Close() {
 	c.stopLocked()
 }
 
-func (c *Controller) loadMedia() error {
-	return c.app.Load(c.audioURL, 0, "audio/mpeg", false, false, false)
+func (c *Controller) loadMedia(ctx context.Context) error {
+	return c.client.LoadMedia(ctx, c.audioURL, "audio/mpeg")
 }
 
 func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName string) {
@@ -233,54 +211,50 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 		case <-ticker.C:
 			c.mu.Lock()
 
-			if c.app == nil {
+			if c.client == nil {
 				c.mu.Unlock()
 				return
 			}
 
-			castApp, castMedia, _ := c.app.Status()
-
 			if c.status.State == StatePaused {
-				// Intentionally stopped — don't touch media.
 				c.mu.Unlock()
 				continue
 			}
 
-			// Check if media has finished (need to re-load for looping)
-			if castMedia == nil || castMedia.PlayerState == "IDLE" {
-				// Media finished or was never started — re-load for looping
-				c.log.Info("media idle/finished, re-loading for loop")
-				if err := c.loadMedia(); err != nil {
-					consecutiveErrors++
-					c.log.Error("re-load failed", "error", err, "consecutive", consecutiveErrors)
-					if consecutiveErrors >= 3 {
-						c.log.Error("too many consecutive errors, attempting full reconnect")
-						c.reconnectLocked(ctx, speakerIP, speakerName)
-						consecutiveErrors = 0
-					}
-				} else {
-					consecutiveErrors = 0
-					c.status.State = StatePlaying
-				}
-			} else if castApp == nil {
-				// App disappeared — reconnect
+			pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Second)
+			ms, err := c.client.GetMediaStatus(pollCtx)
+			pollCancel()
+
+			if err != nil {
 				consecutiveErrors++
-				c.log.Warn("cast app disappeared", "consecutive", consecutiveErrors)
+				c.log.Error("status poll failed", "error", err, "consecutive", consecutiveErrors)
 				if consecutiveErrors >= 3 {
+					c.log.Error("too many consecutive errors, attempting full reconnect")
 					c.reconnectLocked(ctx, speakerIP, speakerName)
 					consecutiveErrors = 0
 				}
-			} else {
-				consecutiveErrors = 0
-				// Sync state from actual player state
-				switch castMedia.PlayerState {
-				case "PLAYING":
-					c.status.State = StatePlaying
-				case "PAUSED":
-					c.status.State = StatePaused
-				case "BUFFERING":
+				c.mu.Unlock()
+				continue
+			}
+
+			consecutiveErrors = 0
+
+			switch ms.PlayerState {
+			case "IDLE", "":
+				c.log.Info("media idle/finished, re-loading for loop")
+				loadCtx, loadCancel := context.WithTimeout(ctx, 5*time.Second)
+				if err := c.loadMedia(loadCtx); err != nil {
+					c.log.Error("re-load failed", "error", err)
+				} else {
 					c.status.State = StatePlaying
 				}
+				loadCancel()
+			case "PLAYING":
+				c.status.State = StatePlaying
+			case "PAUSED":
+				c.status.State = StatePaused
+			case "BUFFERING":
+				c.status.State = StatePlaying
 			}
 
 			c.mu.Unlock()
@@ -289,14 +263,14 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 }
 
 func (c *Controller) reconnectLocked(ctx context.Context, speakerIP, speakerName string) {
-	if c.app != nil {
-		_ = c.app.Close(false)
-		c.app = nil
+	if c.client != nil {
+		c.client.Close()
+		c.client = nil
 	}
 
 	c.log.Info("reconnecting", "speaker", speakerName, "ip", speakerIP)
 
-	app, err := connectWithTimeout(speakerIP, 8009, connectTimeout)
+	client, err := c.connectAndLaunch(ctx, speakerIP)
 	if err != nil {
 		c.log.Error("reconnect failed", "error", err)
 		c.status = Status{
@@ -308,9 +282,12 @@ func (c *Controller) reconnectLocked(ctx context.Context, speakerIP, speakerName
 		return
 	}
 
-	c.app = app
+	c.client = client
 
-	if err := c.loadMedia(); err != nil {
+	loadCtx, loadCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer loadCancel()
+
+	if err := c.loadMedia(loadCtx); err != nil {
 		c.log.Error("reconnect load failed", "error", err)
 		c.status = Status{
 			State:       StateError,
