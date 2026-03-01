@@ -253,9 +253,24 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 				continue
 			}
 
+			// Grab the client reference then release the lock during slow
+			// network I/O so Stop() isn't blocked while we poll.
+			client := c.client
+			c.mu.Unlock()
+
 			pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Second)
-			ms, err := c.client.GetMediaStatus(pollCtx)
+			ms, err := client.GetMediaStatus(pollCtx)
 			pollCancel()
+
+			// Re-acquire the lock and verify the session is still ours.
+			// Stop() may have run while we were polling.
+			c.mu.Lock()
+
+			if c.client != client {
+				// Session was stopped or replaced while we were polling.
+				c.mu.Unlock()
+				return
+			}
 
 			if err != nil {
 				consecutiveErrors++
