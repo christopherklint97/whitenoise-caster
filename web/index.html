@@ -62,14 +62,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </div>
 
 <button class="play-btn" id="playBtn" aria-label="Play/Pause">
-  <svg id="playIcon" viewBox="0 0 24 24"><polygon points="8,3 22,12 8,21"/></svg>
+  <svg id="playIcon" viewBox="0 0 24 24"><polygon points="6,3 20,12 6,21"/></svg>
   <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
   <svg id="stopIcon" viewBox="0 0 24 24" style="display:none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
 </button>
 
 <div class="volume-controls">
-  <button class="vol-btn" data-level="0.1">10%</button>
   <button class="vol-btn" data-level="0.2">20%</button>
+  <button class="vol-btn" data-level="0.25">25%</button>
   <button class="vol-btn" data-level="0.3">30%</button>
 </div>
 
@@ -182,6 +182,7 @@ async function pollStatus() {
 }
 
 btn.addEventListener('click', async () => {
+  if (longPressFired) return;
   if (currentState === 'connecting') return;
 
   const selectedIP = speakerSel.value;
@@ -220,9 +221,12 @@ btn.addEventListener('click', async () => {
 
 // Long press to stop
 let pressTimer;
+let longPressFired = false;
 btn.addEventListener('pointerdown', () => {
+  longPressFired = false;
   if (currentState === 'disconnected') return;
   pressTimer = setTimeout(async () => {
+    longPressFired = true;
     try {
       await authFetch('/api/stop', { method: 'POST' });
       pollStatus();
