@@ -464,6 +464,11 @@ func TestE2E_Volume(t *testing.T) {
 		assertCode(t, resp, 200)
 		resp.Body.Close()
 
+		// Set volume to 10%
+		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.1})
+		assertCode(t, resp, 200)
+		resp.Body.Close()
+
 		// Set volume to 20%
 		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.2})
 		assertCode(t, resp, 200)
@@ -471,11 +476,6 @@ func TestE2E_Volume(t *testing.T) {
 
 		// Set volume to 30%
 		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.3})
-		assertCode(t, resp, 200)
-		resp.Body.Close()
-
-		// Set volume to 40%
-		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.4})
 		assertCode(t, resp, 200)
 		resp.Body.Close()
 
