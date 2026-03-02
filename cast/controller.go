@@ -40,14 +40,33 @@ type Status struct {
 	Timer       TimerInfo `json:"timer"`
 }
 
+// castClient is the subset of Client methods the controller uses.
+// *Client satisfies this interface; tests can substitute a mock.
+type castClient interface {
+	LoadMedia(ctx context.Context, url, contentType string) error
+	SetMuted(ctx context.Context, muted bool) error
+	SetVolume(ctx context.Context, level float32) error
+	Play(ctx context.Context) error
+	Pause(ctx context.Context) error
+	GetMediaStatus(ctx context.Context) (*mediaStatus, error)
+	Close()
+}
+
 type Controller struct {
 	mu       sync.RWMutex
 	log      *slog.Logger
 	audioURL string
 
-	client     *Client
+	client     castClient
 	status     Status
 	cancelLoop context.CancelFunc
+
+	// dialAndLaunch connects to a speaker and launches the media receiver.
+	// Defaults to connectAndLaunch; overridden in tests.
+	dialAndLaunch func(ctx context.Context, ip string) (castClient, error)
+
+	// reconnectDelays is the backoff schedule for reconnect retries.
+	reconnectDelays []time.Duration
 
 	timerCancel   context.CancelFunc
 	timerDeadline time.Time
@@ -56,11 +75,14 @@ type Controller struct {
 }
 
 func NewController(logger *slog.Logger, audioURL string) *Controller {
-	return &Controller{
-		log:      logger,
-		audioURL: audioURL,
-		status:   Status{State: StateDisconnected},
+	c := &Controller{
+		log:             logger,
+		audioURL:        audioURL,
+		status:          Status{State: StateDisconnected},
+		reconnectDelays: []time.Duration{0, 5 * time.Second, 10 * time.Second},
 	}
+	c.dialAndLaunch = c.connectAndLaunch
+	return c
 }
 
 const connectTimeout = 10 * time.Second
@@ -80,7 +102,7 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 	// Unlock during slow network I/O so GetStatus and other reads aren't blocked.
 	c.mu.Unlock()
 
-	client, err := c.connectAndLaunch(ctx, speakerIP)
+	client, err := c.dialAndLaunch(ctx, speakerIP)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,7 +142,7 @@ func (c *Controller) Play(ctx context.Context, speakerIP, speakerName string) er
 	return nil
 }
 
-func (c *Controller) connectAndLaunch(ctx context.Context, ip string) (*Client, error) {
+func (c *Controller) connectAndLaunch(ctx context.Context, ip string) (castClient, error) {
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 
@@ -435,50 +457,68 @@ func (c *Controller) reconnect(ctx context.Context, speakerIP, speakerName strin
 		c.client = nil
 	}
 
-	c.log.Info("reconnecting", "speaker", speakerName, "ip", speakerIP)
+	var lastErr error
 
-	// Drop lock during slow network I/O.
-	c.mu.Unlock()
-	client, err := c.connectAndLaunch(ctx, speakerIP)
-	c.mu.Lock()
+	for attempt, delay := range c.reconnectDelays {
+		if delay > 0 {
+			c.log.Info("reconnect backoff", "delay", delay, "attempt", attempt+1)
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				c.mu.Lock()
+				return
+			case <-time.After(delay):
+			}
+			c.mu.Lock()
+		}
 
-	if err != nil {
-		c.log.Error("reconnect failed", "error", err)
+		c.log.Info("reconnecting", "speaker", speakerName, "ip", speakerIP, "attempt", attempt+1)
+
+		// Drop lock during slow network I/O.
+		c.mu.Unlock()
+		client, err := c.dialAndLaunch(ctx, speakerIP)
+		c.mu.Lock()
+
+		if err != nil {
+			lastErr = err
+			c.log.Error("reconnect failed", "error", err, "attempt", attempt+1)
+			continue
+		}
+
+		c.client = client
+
+		loadCtx, loadCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := c.loadMedia(loadCtx); err != nil {
+			c.log.Error("reconnect load failed", "error", err, "attempt", attempt+1)
+			_ = c.client.SetMuted(loadCtx, false)
+			loadCancel()
+			c.client.Close()
+			c.client = nil
+			lastErr = err
+			continue
+		}
+
+		// Unmute now that the launch chime has passed.
+		if err := c.client.SetMuted(loadCtx, false); err != nil {
+			c.log.Warn("failed to unmute after reconnect", "error", err)
+		}
+		loadCancel()
+
 		c.status = Status{
-			State:       StateError,
+			State:       StatePlaying,
 			SpeakerIP:   speakerIP,
 			SpeakerName: speakerName,
-			Error:       fmt.Sprintf("reconnect: %v", err),
 		}
+		c.log.Info("reconnected successfully", "speaker", speakerName, "attempt", attempt+1)
 		return
 	}
 
-	c.client = client
-
-	loadCtx, loadCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer loadCancel()
-
-	if err := c.loadMedia(loadCtx); err != nil {
-		c.log.Error("reconnect load failed", "error", err)
-		_ = c.client.SetMuted(loadCtx, false)
-		c.status = Status{
-			State:       StateError,
-			SpeakerIP:   speakerIP,
-			SpeakerName: speakerName,
-			Error:       fmt.Sprintf("reconnect load: %v", err),
-		}
-		return
-	}
-
-	// Unmute now that the launch chime has passed.
-	if err := c.client.SetMuted(loadCtx, false); err != nil {
-		c.log.Warn("failed to unmute after reconnect", "error", err)
-	}
-
+	// All retries exhausted — cancel timer and enter error state.
+	c.cancelTimerLocked()
 	c.status = Status{
-		State:       StatePlaying,
+		State:       StateError,
 		SpeakerIP:   speakerIP,
 		SpeakerName: speakerName,
+		Error:       fmt.Sprintf("reconnect: %v", lastErr),
 	}
-	c.log.Info("reconnected successfully", "speaker", speakerName)
 }
