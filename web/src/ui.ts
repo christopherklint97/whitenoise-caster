@@ -5,6 +5,7 @@ import { updateTimerUI } from './timer';
 let currentState: State = 'disconnected';
 let activeSpeakerIP = '';
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let selectedVolume: number | null = null;
 
 // DOM refs (assigned in initUI)
 let btn: HTMLButtonElement;
@@ -134,6 +135,9 @@ export function initUI(): void {
         const err = await res.json();
         updateUI({ state: 'error', error: err.error || 'Failed', timer: { active: false, remaining_s: 0, action: 'stop', volume_level: 0 } });
       } else {
+        if (selectedVolume !== null) {
+          try { await setVolume(selectedVolume); } catch { /* ignore */ }
+        }
         pollStatus();
       }
     } catch {
@@ -156,16 +160,18 @@ export function initUI(): void {
   btn.addEventListener('pointerup', () => clearTimeout(pressTimer));
   btn.addEventListener('pointerleave', () => clearTimeout(pressTimer));
 
-  // Volume buttons
+  // Volume buttons — always selectable; applied immediately if connected,
+  // otherwise stored and applied when playback starts.
   document.querySelectorAll('.vol-btn').forEach(b => {
     b.addEventListener('click', async () => {
-      if (currentState !== 'playing' && currentState !== 'paused') return;
       const level = parseFloat((b as HTMLElement).dataset.level!);
-      try {
-        await setVolume(level);
-        document.querySelectorAll('.vol-btn').forEach(v => v.classList.remove('active'));
-        b.classList.add('active');
-      } catch { /* ignore */ }
+      document.querySelectorAll('.vol-btn').forEach(v => v.classList.remove('active'));
+      b.classList.add('active');
+      selectedVolume = level;
+
+      if (currentState === 'playing' || currentState === 'paused') {
+        try { await setVolume(level); } catch { /* ignore */ }
+      }
     });
   });
 }
