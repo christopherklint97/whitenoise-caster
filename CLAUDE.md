@@ -37,6 +37,7 @@ docs/deployment.md        — full deployment guide
 - **Reconnect**: 3 consecutive errors trigger full disconnect/reconnect.
 - **Auth**: Basic auth wraps API endpoints but NOT the audio endpoint (Chromecast needs unauthenticated access).
 - **Audio serving**: http.ServeContent for Range/byte-range support.
+- **Sleep Timer**: Server-side timer goroutine (timerLoop) fires after a user-set duration to stop playback or reduce volume. Timer state rides along in Status struct via 3s polls. Auto-cancelled on Stop/Play/Close via cancelTimerLocked() in stopLocked().
 
 ## go-chromecast API (important signatures)
 ```go

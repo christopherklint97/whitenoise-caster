@@ -19,9 +19,12 @@ import (
 
 // e2eMock is a stateful mock that simulates real controller state transitions.
 type e2eMock struct {
-	mu     sync.Mutex
-	status cast.Status
-	volume float32
+	mu          sync.Mutex
+	status      cast.Status
+	volume      float32
+	timerActive bool
+	timerAction cast.TimerAction
+	timerVolume float32
 }
 
 func (m *e2eMock) Play(_ context.Context, ip, name string) error {
@@ -53,6 +56,9 @@ func (m *e2eMock) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status = cast.Status{State: cast.StateDisconnected}
+	m.timerActive = false
+	m.timerAction = ""
+	m.timerVolume = 0
 	return nil
 }
 
@@ -66,10 +72,39 @@ func (m *e2eMock) SetVolume(level float32) error {
 	return nil
 }
 
+func (m *e2eMock) SetTimer(durationS int, action cast.TimerAction, volumeLevel float32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.status.State == cast.StateDisconnected {
+		return fmt.Errorf("not connected")
+	}
+	m.timerActive = true
+	m.timerAction = action
+	m.timerVolume = volumeLevel
+	return nil
+}
+
+func (m *e2eMock) CancelTimer() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.timerActive = false
+	m.timerAction = ""
+	m.timerVolume = 0
+}
+
 func (m *e2eMock) GetStatus() cast.Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.status
+	s := m.status
+	if m.timerActive {
+		s.Timer = cast.TimerInfo{
+			Active:      true,
+			RemainingS:  60,
+			Action:      m.timerAction,
+			VolumeLevel: m.timerVolume,
+		}
+	}
+	return s
 }
 
 // e2eEnv bundles the test server, client, and config for E2E tests.
@@ -171,6 +206,16 @@ func (e *e2eEnv) postEmpty(t *testing.T, path string) *http.Response {
 	resp, err := e.client.Post(e.url(path), "", nil)
 	if err != nil {
 		t.Fatalf("POST %s: %v", path, err)
+	}
+	return resp
+}
+
+func (e *e2eEnv) delete(t *testing.T, path string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest("DELETE", e.url(path), nil)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", path, err)
 	}
 	return resp
 }
@@ -581,6 +626,8 @@ func TestE2E_AuthRequired(t *testing.T) {
 		{"POST", "/api/pause"},
 		{"POST", "/api/stop"},
 		{"POST", "/api/volume"},
+		{"POST", "/api/timer"},
+		{"DELETE", "/api/timer"},
 	}
 
 	t.Run("API requires auth", func(t *testing.T) {
@@ -613,4 +660,81 @@ func TestE2E_AuthRequired(t *testing.T) {
 		resp := env.get(t, "/audio/test-secret/whitenoise.mp3")
 		assertCode(t, resp, 200)
 	})
+}
+
+func TestE2E_TimerSetAndCancel(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Play
+	resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	s := decodeStatus(t, resp)
+	if s.State != cast.StatePlaying {
+		t.Fatalf("after play: want playing, got %s", s.State)
+	}
+
+	// Set timer
+	resp = env.postJSON(t, "/api/timer", timerRequest{DurationS: 3600, Action: "stop"})
+	assertCode(t, resp, 200)
+	s = decodeStatus(t, resp)
+	if !s.Timer.Active {
+		t.Fatal("expected timer to be active after set")
+	}
+	if s.Timer.Action != cast.TimerActionStop {
+		t.Errorf("timer action: want %q, got %q", cast.TimerActionStop, s.Timer.Action)
+	}
+
+	// Status confirms active timer
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if !s.Timer.Active {
+		t.Fatal("expected timer to be active in status poll")
+	}
+
+	// Cancel timer
+	resp = env.delete(t, "/api/timer")
+	assertCode(t, resp, 200)
+	s = decodeStatus(t, resp)
+	if s.Timer.Active {
+		t.Fatal("expected timer to be inactive after cancel")
+	}
+
+	// Status confirms timer gone
+	resp = env.get(t, "/api/status")
+	s = decodeStatus(t, resp)
+	if s.Timer.Active {
+		t.Fatal("expected timer to be inactive in status poll after cancel")
+	}
+}
+
+func TestE2E_TimerAutoCancelOnStop(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Play
+	resp := env.postJSON(t, "/api/play", playRequest{SpeakerIP: "192.168.1.100"})
+	resp.Body.Close()
+
+	// Set timer
+	resp = env.postJSON(t, "/api/timer", timerRequest{DurationS: 3600, Action: "stop"})
+	s := decodeStatus(t, resp)
+	if !s.Timer.Active {
+		t.Fatal("expected timer to be active")
+	}
+
+	// Stop playback — timer should auto-cancel
+	resp = env.postEmpty(t, "/api/stop")
+	s = decodeStatus(t, resp)
+	if s.State != cast.StateDisconnected {
+		t.Fatalf("after stop: want disconnected, got %s", s.State)
+	}
+	if s.Timer.Active {
+		t.Fatal("expected timer to be cleared after stop")
+	}
+}
+
+func TestE2E_TimerWhileDisconnected(t *testing.T) {
+	env := setupE2E(t, "", "")
+
+	// Set timer without playing — should fail
+	resp := env.postJSON(t, "/api/timer", timerRequest{DurationS: 3600, Action: "stop"})
+	assertCode(t, resp, 400)
 }

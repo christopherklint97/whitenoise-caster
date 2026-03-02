@@ -18,11 +18,26 @@ const (
 	StateError        State = "error"
 )
 
+type TimerAction string
+
+const (
+	TimerActionStop   TimerAction = "stop"
+	TimerActionVolume TimerAction = "volume"
+)
+
+type TimerInfo struct {
+	Active      bool        `json:"active"`
+	RemainingS  int         `json:"remaining_s"`
+	Action      TimerAction `json:"action"`
+	VolumeLevel float32     `json:"volume_level"`
+}
+
 type Status struct {
-	State       State  `json:"state"`
-	SpeakerIP   string `json:"speaker_ip,omitempty"`
-	SpeakerName string `json:"speaker_name,omitempty"`
-	Error       string `json:"error,omitempty"`
+	State       State     `json:"state"`
+	SpeakerIP   string    `json:"speaker_ip,omitempty"`
+	SpeakerName string    `json:"speaker_name,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	Timer       TimerInfo `json:"timer"`
 }
 
 type Controller struct {
@@ -33,6 +48,11 @@ type Controller struct {
 	client     *Client
 	status     Status
 	cancelLoop context.CancelFunc
+
+	timerCancel   context.CancelFunc
+	timerDeadline time.Time
+	timerAction   TimerAction
+	timerVolume   float32
 }
 
 func NewController(logger *slog.Logger, audioURL string) *Controller {
@@ -184,6 +204,7 @@ func (c *Controller) Stop() error {
 }
 
 func (c *Controller) stopLocked() {
+	c.cancelTimerLocked()
 	if c.cancelLoop != nil {
 		c.cancelLoop()
 		c.cancelLoop = nil
@@ -198,7 +219,20 @@ func (c *Controller) stopLocked() {
 func (c *Controller) GetStatus() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.status
+	s := c.status
+	if c.timerCancel != nil {
+		remaining := int(time.Until(c.timerDeadline).Seconds())
+		if remaining < 0 {
+			remaining = 0
+		}
+		s.Timer = TimerInfo{
+			Active:      true,
+			RemainingS:  remaining,
+			Action:      c.timerAction,
+			VolumeLevel: c.timerVolume,
+		}
+	}
+	return s
 }
 
 func (c *Controller) SetVolume(level float32) error {
@@ -224,6 +258,90 @@ func (c *Controller) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopLocked()
+}
+
+func (c *Controller) SetTimer(durationS int, action TimerAction, volumeLevel float32) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.client == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	c.cancelTimerLocked()
+
+	dur := time.Duration(durationS) * time.Second
+	c.timerDeadline = time.Now().Add(dur)
+	c.timerAction = action
+	c.timerVolume = volumeLevel
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.timerCancel = cancel
+	go c.timerLoop(ctx, dur, action, volumeLevel)
+
+	c.log.Info("timer set", "duration_s", durationS, "action", action)
+	return nil
+}
+
+func (c *Controller) CancelTimer() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cancelTimerLocked()
+}
+
+func (c *Controller) cancelTimerLocked() {
+	if c.timerCancel != nil {
+		c.timerCancel()
+		c.timerCancel = nil
+	}
+	c.timerDeadline = time.Time{}
+	c.timerAction = ""
+	c.timerVolume = 0
+}
+
+func (c *Controller) timerLoop(ctx context.Context, dur time.Duration, action TimerAction, volumeLevel float32) {
+	t := time.NewTimer(dur)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-t.C:
+	}
+
+	c.mu.Lock()
+
+	// Verify the timer wasn't cancelled while we were waiting.
+	if c.timerCancel == nil {
+		c.mu.Unlock()
+		return
+	}
+
+	c.log.Info("timer fired", "action", action)
+
+	switch action {
+	case TimerActionStop:
+		c.stopLocked()
+		c.mu.Unlock()
+	case TimerActionVolume:
+		client := c.client
+		// Clear timer state before releasing lock.
+		c.cancelTimerLocked()
+		c.mu.Unlock()
+
+		if client != nil {
+			volCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := client.SetVolume(volCtx, volumeLevel); err != nil {
+				c.log.Error("timer volume set failed", "error", err)
+			} else {
+				c.log.Info("timer volume set", "level", volumeLevel)
+			}
+		}
+	default:
+		c.cancelTimerLocked()
+		c.mu.Unlock()
+	}
 }
 
 func (c *Controller) loadMedia(ctx context.Context) error {

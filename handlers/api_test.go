@@ -22,6 +22,8 @@ type mockCaster struct {
 	pauseFunc     func() error
 	stopFunc      func() error
 	setVolumeFunc func(level float32) error
+	setTimerFunc  func(durationS int, action cast.TimerAction, volumeLevel float32) error
+	cancelTimerCalled bool
 	status        cast.Status
 }
 
@@ -51,6 +53,17 @@ func (m *mockCaster) SetVolume(level float32) error {
 		return m.setVolumeFunc(level)
 	}
 	return nil
+}
+
+func (m *mockCaster) SetTimer(durationS int, action cast.TimerAction, volumeLevel float32) error {
+	if m.setTimerFunc != nil {
+		return m.setTimerFunc(durationS, action, volumeLevel)
+	}
+	return nil
+}
+
+func (m *mockCaster) CancelTimer() {
+	m.cancelTimerCalled = true
 }
 
 func (m *mockCaster) GetStatus() cast.Status {
@@ -617,6 +630,8 @@ func TestAuth(t *testing.T) {
 			{"POST", "/api/pause"},
 			{"POST", "/api/stop"},
 			{"POST", "/api/volume"},
+			{"POST", "/api/timer"},
+			{"DELETE", "/api/timer"},
 		}
 
 		for _, ep := range endpoints {
@@ -687,4 +702,174 @@ func TestWrongMethodOnPostEndpoints(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", w.Code)
 	}
+}
+
+func TestHandleSetTimer(t *testing.T) {
+	t.Run("success_stop", func(t *testing.T) {
+		var gotDur int
+		var gotAction cast.TimerAction
+		mock := &mockCaster{
+			setTimerFunc: func(d int, a cast.TimerAction, v float32) error {
+				gotDur = d
+				gotAction = a
+				return nil
+			},
+			status: cast.Status{State: cast.StatePlaying, SpeakerName: "Living Room"},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":3600,"action":"stop"}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if gotDur != 3600 {
+			t.Errorf("duration: want 3600, got %d", gotDur)
+		}
+		if gotAction != cast.TimerActionStop {
+			t.Errorf("action: want %q, got %q", cast.TimerActionStop, gotAction)
+		}
+	})
+
+	t.Run("success_volume", func(t *testing.T) {
+		var gotVol float32
+		mock := &mockCaster{
+			setTimerFunc: func(d int, a cast.TimerAction, v float32) error {
+				gotVol = v
+				return nil
+			},
+			status: cast.Status{State: cast.StatePlaying, SpeakerName: "Living Room"},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":1800,"action":"volume","volume_level":0.1}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if gotVol != 0.1 {
+			t.Errorf("volume_level: want 0.1, got %f", gotVol)
+		}
+	})
+
+	t.Run("invalid_body", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString("{bad"))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("duration_zero", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":0,"action":"stop"}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("duration_too_large", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":50000,"action":"stop"}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid_action", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":60,"action":"explode"}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("volume_out_of_range", func(t *testing.T) {
+		mock := &mockCaster{}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":60,"action":"volume","volume_level":1.5}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("not_connected", func(t *testing.T) {
+		mock := &mockCaster{
+			setTimerFunc: func(d int, a cast.TimerAction, v float32) error {
+				return fmt.Errorf("not connected")
+			},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		body := `{"duration_s":60,"action":"stop"}`
+		req := httptest.NewRequest("POST", "/api/timer", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestHandleCancelTimer(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		mock := &mockCaster{
+			status: cast.Status{State: cast.StatePlaying, SpeakerName: "Living Room"},
+		}
+		mux := setupHandler(t, mock, nil)
+
+		req := httptest.NewRequest("DELETE", "/api/timer", nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if !mock.cancelTimerCalled {
+			t.Error("expected CancelTimer() to be called")
+		}
+
+		var got cast.Status
+		json.NewDecoder(w.Body).Decode(&got)
+		if got.State != cast.StatePlaying {
+			t.Errorf("state: want %q, got %q", cast.StatePlaying, got.State)
+		}
+	})
 }

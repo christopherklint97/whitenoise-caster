@@ -19,6 +19,8 @@ type Caster interface {
 	Stop() error
 	SetVolume(level float32) error
 	GetStatus() cast.Status
+	SetTimer(durationS int, action cast.TimerAction, volumeLevel float32) error
+	CancelTimer()
 }
 
 type Handler struct {
@@ -51,6 +53,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/pause", h.withAuth(h.handlePause))
 	mux.HandleFunc("POST /api/stop", h.withAuth(h.handleStop))
 	mux.HandleFunc("POST /api/volume", h.withAuth(h.handleVolume))
+	mux.HandleFunc("POST /api/timer", h.withAuth(h.handleSetTimer))
+	mux.HandleFunc("DELETE /api/timer", h.withAuth(h.handleCancelTimer))
 	mux.HandleFunc("GET /api/status", h.withAuth(h.handleStatus))
 	mux.HandleFunc("GET /api/speakers", h.withAuth(h.handleSpeakers))
 }
@@ -131,6 +135,12 @@ type volumeRequest struct {
 	Level float32 `json:"level"`
 }
 
+type timerRequest struct {
+	DurationS   int     `json:"duration_s"`
+	Action      string  `json:"action"`
+	VolumeLevel float32 `json:"volume_level"`
+}
+
 func (h *Handler) handlePlay(w http.ResponseWriter, r *http.Request) {
 	var req playRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -195,6 +205,42 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleSpeakers(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, h.cfg.Speakers)
+}
+
+func (h *Handler) handleSetTimer(w http.ResponseWriter, r *http.Request) {
+	var req timerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.DurationS < 1 || req.DurationS > 43200 {
+		jsonError(w, "duration_s must be between 1 and 43200", http.StatusBadRequest)
+		return
+	}
+
+	action := cast.TimerAction(req.Action)
+	if action != cast.TimerActionStop && action != cast.TimerActionVolume {
+		jsonError(w, "action must be \"stop\" or \"volume\"", http.StatusBadRequest)
+		return
+	}
+
+	if action == cast.TimerActionVolume && (req.VolumeLevel < 0 || req.VolumeLevel > 1) {
+		jsonError(w, "volume_level must be between 0 and 1", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.controller.SetTimer(req.DurationS, action, req.VolumeLevel); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	jsonOK(w, h.controller.GetStatus())
+}
+
+func (h *Handler) handleCancelTimer(w http.ResponseWriter, r *http.Request) {
+	h.controller.CancelTimer()
+	jsonOK(w, h.controller.GetStatus())
 }
 
 func jsonOK(w http.ResponseWriter, data any) {

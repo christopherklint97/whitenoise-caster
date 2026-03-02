@@ -5,7 +5,7 @@ A Go service that plays looped white noise on Chromecast/Google Home speakers, c
 ## Architecture
 
 - **Go backend** wrapping [go-chromecast](https://github.com/vishen/go-chromecast) for cast control
-- **Embedded web UI** — dark-theme PWA with a giant play/pause button
+- **Embedded web UI** — dark-theme PWA with play/pause, volume, and sleep timer
 - **Audio served via HTTPS** so the Chromecast fetches it directly over the internet
 - **WireGuard tunnel** connects the VPS to the local network where the Chromecast lives
 
@@ -66,3 +66,7 @@ Edit `Caddyfile` with your domain. Caddy handles automatic HTTPS.
 3. Server tells the Chromecast to load the audio URL (public HTTPS)
 4. A monitor goroutine polls every 3s and re-loads the audio when it finishes (looping)
 5. On persistent errors, it performs a full reconnect
+
+## Sleep Timer
+
+Set a sleep timer to automatically stop playback or reduce volume after a set duration (up to 12 hours). The timer runs server-side so it works even after closing your phone/browser. Set via iOS-style scroll wheels in the web UI. Auto-cancels when playback is stopped.

@@ -28,6 +28,43 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .vol-btn{padding:12px 20px;border-radius:12px;border:2px solid #333;background:#1a1a1a;color:#eee;font-size:16px;font-weight:600;cursor:pointer;transition:all .2s ease;-webkit-tap-highlight-color:transparent;min-width:64px}
 .vol-btn:active{transform:scale(.93)}
 .vol-btn.active{border-color:#00cc66;color:#00cc66}
+.timer-section{margin-top:1.5rem;width:80vw;max-width:300px;text-align:center}
+.timer-toggle-btn{padding:10px 20px;border-radius:12px;border:2px solid #333;background:#1a1a1a;color:#eee;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s ease;-webkit-tap-highlight-color:transparent;width:100%}
+.timer-toggle-btn:active{transform:scale(.95)}
+.timer-toggle-btn:disabled{opacity:.4;cursor:default;transform:none}
+.timer-setup{display:none;margin-top:12px}
+.timer-setup.visible{display:block}
+.timer-wheels{display:flex;justify-content:center;gap:8px;margin-bottom:12px;align-items:center}
+.wheel-group{display:flex;flex-direction:column;align-items:center}
+.wheel-label{font-size:12px;color:#666;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px}
+.wheel-container{position:relative;height:220px;width:64px;overflow:hidden}
+.wheel-scroll{height:100%;overflow-y:scroll;-webkit-overflow-scrolling:touch;scroll-snap-type:y mandatory;-ms-overflow-style:none;scrollbar-width:none}
+.wheel-scroll::-webkit-scrollbar{display:none}
+.wheel-item{height:44px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:500;color:#555;scroll-snap-align:center;transition:color .15s}
+.wheel-item.selected{color:#eee}
+.wheel-item.spacer{pointer-events:none}
+.wheel-highlight{position:absolute;top:50%;left:0;right:0;height:44px;transform:translateY(-50%);border-top:1px solid #333;border-bottom:1px solid #333;pointer-events:none}
+.wheel-container::before,.wheel-container::after{content:'';position:absolute;left:0;right:0;height:88px;pointer-events:none;z-index:1}
+.wheel-container::before{top:0;background:linear-gradient(#111,transparent)}
+.wheel-container::after{bottom:0;background:linear-gradient(transparent,#111)}
+.wheel-sep{font-size:28px;color:#555;font-weight:700;padding-top:28px}
+.timer-actions{display:flex;gap:8px;margin-bottom:12px;justify-content:center}
+.timer-action-btn{flex:1;padding:10px;border-radius:10px;border:2px solid #333;background:#1a1a1a;color:#888;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+.timer-action-btn.active{border-color:#00cc66;color:#00cc66}
+.timer-vol-row{display:none;margin-bottom:12px;align-items:center;gap:8px;padding:0 4px}
+.timer-vol-row.visible{display:flex}
+.timer-vol-row input[type=range]{flex:1;accent-color:#00cc66}
+.timer-vol-label{font-size:14px;color:#888;min-width:36px;text-align:right}
+.timer-btns{display:flex;gap:8px}
+.timer-btns button{flex:1;padding:10px;border-radius:10px;border:2px solid #333;background:#1a1a1a;color:#eee;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s}
+.timer-btns button:active{transform:scale(.95)}
+.timer-btns .timer-set-btn{border-color:#00cc66;color:#00cc66}
+.timer-active{display:none;margin-top:12px;text-align:center}
+.timer-active.visible{display:block}
+.timer-countdown{font-size:36px;font-weight:700;font-variant-numeric:tabular-nums;color:#00cc66;margin-bottom:4px}
+.timer-action-label{font-size:13px;color:#888;margin-bottom:12px}
+.timer-cancel-btn{padding:10px 24px;border-radius:10px;border:2px solid #333;background:#1a1a1a;color:#eee;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s}
+.timer-cancel-btn:active{transform:scale(.95)}
 .status{margin-top:1rem;font-size:14px;color:#888;text-align:center;min-height:20px}
 .status.error-text{color:#cc3333}
 .login-overlay{position:fixed;inset:0;background:#111;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100}
@@ -71,6 +108,40 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   <button class="vol-btn" data-level="0.2">20%</button>
   <button class="vol-btn" data-level="0.25">25%</button>
   <button class="vol-btn" data-level="0.3">30%</button>
+</div>
+
+<div class="timer-section" id="timerSection">
+  <button class="timer-toggle-btn" id="timerToggleBtn" disabled>Set Sleep Timer</button>
+  <div class="timer-setup" id="timerSetup">
+    <div class="timer-wheels">
+      <div class="wheel-group">
+        <div class="wheel-label">Hours</div>
+        <div class="wheel-container"><div class="wheel-highlight"></div><div class="wheel-scroll" id="wheelHours"></div></div>
+      </div>
+      <div class="wheel-sep">:</div>
+      <div class="wheel-group">
+        <div class="wheel-label">Minutes</div>
+        <div class="wheel-container"><div class="wheel-highlight"></div><div class="wheel-scroll" id="wheelMinutes"></div></div>
+      </div>
+    </div>
+    <div class="timer-actions">
+      <button class="timer-action-btn active" id="timerActStop">Stop Playback</button>
+      <button class="timer-action-btn" id="timerActVol">Set Volume</button>
+    </div>
+    <div class="timer-vol-row" id="timerVolRow">
+      <input type="range" min="0" max="100" value="10" id="timerVolSlider">
+      <span class="timer-vol-label" id="timerVolLabel">10%</span>
+    </div>
+    <div class="timer-btns">
+      <button class="timer-set-btn" id="timerSetBtn">Set</button>
+      <button id="timerDismissBtn">Cancel</button>
+    </div>
+  </div>
+  <div class="timer-active" id="timerActive">
+    <div class="timer-countdown" id="timerCountdown">00:00</div>
+    <div class="timer-action-label" id="timerActionLabel"></div>
+    <button class="timer-cancel-btn" id="timerCancelBtn">Cancel Timer</button>
+  </div>
 </div>
 
 <div class="status" id="status">Not connected</div>
@@ -251,6 +322,177 @@ document.querySelectorAll('.vol-btn').forEach(b => {
     } catch {}
   });
 });
+
+// --- Sleep Timer ---
+const timerToggleBtn = document.getElementById('timerToggleBtn');
+const timerSetup = document.getElementById('timerSetup');
+const timerActive = document.getElementById('timerActive');
+const timerCountdown = document.getElementById('timerCountdown');
+const timerActionLabel = document.getElementById('timerActionLabel');
+const timerCancelBtn = document.getElementById('timerCancelBtn');
+const timerSetBtn = document.getElementById('timerSetBtn');
+const timerDismissBtn = document.getElementById('timerDismissBtn');
+const timerActStop = document.getElementById('timerActStop');
+const timerActVol = document.getElementById('timerActVol');
+const timerVolRow = document.getElementById('timerVolRow');
+const timerVolSlider = document.getElementById('timerVolSlider');
+const timerVolLabel = document.getElementById('timerVolLabel');
+const wheelHours = document.getElementById('wheelHours');
+const wheelMinutes = document.getElementById('wheelMinutes');
+
+let timerActionMode = 'stop';
+
+function buildWheel(container, count, padZero) {
+  container.innerHTML = '';
+  // 2 spacers top so first value can center
+  for (let i = 0; i < 2; i++) {
+    const sp = document.createElement('div');
+    sp.className = 'wheel-item spacer';
+    container.appendChild(sp);
+  }
+  for (let i = 0; i < count; i++) {
+    const item = document.createElement('div');
+    item.className = 'wheel-item';
+    item.textContent = padZero && i < 10 ? '0' + i : '' + i;
+    item.dataset.value = i;
+    container.appendChild(item);
+  }
+  // 2 spacers bottom
+  for (let i = 0; i < 2; i++) {
+    const sp = document.createElement('div');
+    sp.className = 'wheel-item spacer';
+    container.appendChild(sp);
+  }
+}
+
+function getWheelValue(container) {
+  const scrollTop = container.scrollTop;
+  const idx = Math.round(scrollTop / 44);
+  return Math.max(0, idx);
+}
+
+function updateWheelSelected(container) {
+  const items = container.querySelectorAll('.wheel-item:not(.spacer)');
+  const val = getWheelValue(container);
+  items.forEach((item, i) => {
+    item.classList.toggle('selected', i === val);
+  });
+}
+
+function setWheelValue(container, val) {
+  container.scrollTop = val * 44;
+  updateWheelSelected(container);
+}
+
+buildWheel(wheelHours, 13, false);
+buildWheel(wheelMinutes, 60, true);
+
+wheelHours.addEventListener('scroll', () => updateWheelSelected(wheelHours));
+wheelMinutes.addEventListener('scroll', () => updateWheelSelected(wheelMinutes));
+
+// Default: 0h 30m
+setTimeout(() => { setWheelValue(wheelHours, 0); setWheelValue(wheelMinutes, 30); }, 50);
+
+timerToggleBtn.addEventListener('click', () => {
+  if (timerSetup.classList.contains('visible')) {
+    timerSetup.classList.remove('visible');
+  } else {
+    timerSetup.classList.add('visible');
+  }
+});
+
+timerDismissBtn.addEventListener('click', () => {
+  timerSetup.classList.remove('visible');
+});
+
+timerActStop.addEventListener('click', () => {
+  timerActionMode = 'stop';
+  timerActStop.classList.add('active');
+  timerActVol.classList.remove('active');
+  timerVolRow.classList.remove('visible');
+});
+
+timerActVol.addEventListener('click', () => {
+  timerActionMode = 'volume';
+  timerActVol.classList.add('active');
+  timerActStop.classList.remove('active');
+  timerVolRow.classList.add('visible');
+});
+
+timerVolSlider.addEventListener('input', () => {
+  timerVolLabel.textContent = timerVolSlider.value + '%';
+});
+
+timerSetBtn.addEventListener('click', async () => {
+  const hours = getWheelValue(wheelHours);
+  const minutes = getWheelValue(wheelMinutes);
+  const totalS = hours * 3600 + minutes * 60;
+  if (totalS < 1) return;
+
+  const body = { duration_s: totalS, action: timerActionMode };
+  if (timerActionMode === 'volume') {
+    body.volume_level = parseInt(timerVolSlider.value) / 100;
+  }
+
+  try {
+    const res = await authFetch('/api/timer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) {
+      timerSetup.classList.remove('visible');
+      pollStatus();
+    }
+  } catch {}
+});
+
+timerCancelBtn.addEventListener('click', async () => {
+  try {
+    await authFetch('/api/timer', { method: 'DELETE' });
+    pollStatus();
+  } catch {}
+});
+
+function formatCountdown(seconds) {
+  if (seconds <= 0) return '00:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const pad = n => n < 10 ? '0' + n : '' + n;
+  if (h > 0) return h + ':' + pad(m) + ':' + pad(s);
+  return pad(m) + ':' + pad(s);
+}
+
+function updateTimerUI(data) {
+  const connected = data.state === 'playing' || data.state === 'paused';
+  timerToggleBtn.disabled = !connected;
+
+  if (data.timer && data.timer.active) {
+    timerToggleBtn.style.display = 'none';
+    timerSetup.classList.remove('visible');
+    timerActive.classList.add('visible');
+    timerCountdown.textContent = formatCountdown(data.timer.remaining_s);
+    if (data.timer.action === 'volume') {
+      timerActionLabel.textContent = 'Volume \u2192 ' + Math.round(data.timer.volume_level * 100) + '%';
+    } else {
+      timerActionLabel.textContent = 'Stop playback';
+    }
+  } else {
+    timerActive.classList.remove('visible');
+    timerToggleBtn.style.display = '';
+    if (!connected) {
+      timerSetup.classList.remove('visible');
+    }
+  }
+}
+
+// Patch updateUI to include timer
+const _origUpdateUI = updateUI;
+updateUI = function(data) {
+  _origUpdateUI(data);
+  updateTimerUI(data);
+};
 
 function startSession() {
   loadSpeakers();
