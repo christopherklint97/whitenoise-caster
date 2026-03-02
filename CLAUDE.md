@@ -7,7 +7,8 @@ Go service that casts looped white noise to Chromecast/Google Home speakers via 
 - **Language**: Go 1.25+
 - **Cast library**: github.com/vishen/go-chromecast (application.Application high-level API)
 - **Config**: gopkg.in/yaml.v3
-- **Web UI**: Vanilla HTML/CSS/JS, embedded via `//go:embed`
+- **Web UI**: TypeScript (esbuild bundle) + vanilla HTML/CSS, embedded via `//go:embed`
+- **Frontend tooling**: esbuild (bundler), vitest + jsdom (tests)
 - **Deployment**: Docker + Caddy (auto HTTPS)
 
 ## Project Structure
@@ -18,10 +19,15 @@ cast/controller.go   — thread-safe Chromecast controller with monitor loop
 handlers/api.go      — HTTP routes (Go 1.22+ ServeMux pattern routing)
 handlers/api_test.go — unit tests (function-level mocks, httptest.NewRecorder)
 handlers/e2e_test.go — E2E tests (stateful mock, httptest.NewServer, real web files)
-web/                 — embedded static files (index.html, manifest.json, icon.png)
+web/                 — embedded static files (index.html, app.js, manifest.json, icon.png)
+web/src/             — TypeScript source files (types, api, ui, timer, main)
+web/src/__tests__/   — vitest unit tests for frontend
+web/app.js           — esbuild output (gitignored, built by Makefile/Docker/CI)
+package.json         — esbuild + vitest devDependencies, build/test scripts
+vitest.config.ts     — vitest config (jsdom environment)
 config.example.yaml       — example configuration (committed)
 config.prod.yaml          — production config with credentials (gitignored)
-Dockerfile                — multi-stage build
+Dockerfile                — multi-stage build (Node.js frontend + Go backend)
 docker-compose.yml        — dev: app + caddy with Docker networks
 docker-compose.prod.yml   — prod: host networking for OpenVPN tunnel access
 Caddyfile                 — dev reverse proxy config (example domain)
@@ -51,15 +57,20 @@ app.Status() (*cast.Application, *cast.Media, *cast.Volume)
 ```
 
 ## Commands
-- `go build .` — build binary
-- `make test` — run all tests (unit + E2E)
-- `make vet` — lint
+- `npm install` — install frontend devDependencies
+- `npm run build` — bundle TS → web/app.js via esbuild
+- `npm test` — run vitest frontend unit tests
+- `make build` — build frontend + Go binary
+- `make test` — build frontend + run all Go tests (unit + E2E)
+- `make web-test` — run frontend tests only
+- `make vet` — lint Go code
 - `make run` — build and run with config.yaml
-- `make dev` — hot-reload with air
+- `make dev` — hot-reload with air (watches Go, TS, HTML)
 - `make docker-up` — docker compose up (dev)
 - `make deploy-prod` — docker compose up with production config
 
 ## Style
 - Use log/slog for structured logging
-- Keep the single-binary, single-file-UI approach
-- No frameworks — stdlib HTTP + embedded FS
+- Keep the single-binary approach — frontend bundled into Go binary via embed
+- No frameworks — stdlib HTTP + embedded FS, vanilla HTML/CSS + TypeScript
+- Frontend modules: types.ts, api.ts, ui.ts, timer.ts, main.ts (entry point)

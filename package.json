@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild web/src/main.ts --bundle --outfile=web/app.js --format=iife",
+    "build:watch": "esbuild web/src/main.ts --bundle --outfile=web/app.js --format=iife --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25",
+    "jsdom": "^28.1.0",
+    "vitest": "^3"
+  }
+}

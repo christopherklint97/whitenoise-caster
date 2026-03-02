@@ -25,3 +25,7 @@ Caddyfile.prod
 
 # OpenVPN
 *.ovpn
+
+# Frontend build output
+web/app.js
+node_modules/

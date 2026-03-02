@@ -2,11 +2,11 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/whitenoise-caster ."
+  cmd = "npm run build && go build -o ./tmp/whitenoise-caster ."
   bin = "./tmp/whitenoise-caster"
   args_bin = ["-config", "config.yaml"]
-  include_ext = ["go", "yaml"]
-  exclude_dir = ["tmp", "vendor"]
+  include_ext = ["go", "yaml", "ts", "html"]
+  exclude_dir = ["tmp", "vendor", "node_modules"]
   delay = 500
 
 [log]

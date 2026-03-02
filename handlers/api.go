@@ -44,6 +44,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", h.serveIndex)
 	mux.HandleFunc("GET /manifest.json", h.serveFile("manifest.json", "application/manifest+json"))
 	mux.HandleFunc("GET /icon.png", h.serveFile("icon.png", "image/png"))
+	mux.HandleFunc("GET /app.js", h.serveFile("app.js", "application/javascript"))
+	mux.HandleFunc("GET /sw.js", h.serveFile("sw.js", "application/javascript"))
 
 	// Audio endpoint (no auth — Chromecast must reach this)
 	mux.HandleFunc("GET /audio/{secret}/whitenoise.mp3", h.serveAudio)

@@ -1,8 +1,11 @@
-.PHONY: build run dev clean docker-build docker-up docker-down deploy deploy-prod test vet
+.PHONY: build run dev clean docker-build docker-up docker-down deploy deploy-prod test vet web-build web-test
 
 BINARY := whitenoise-caster
 
-build:
+web-build:
+	npm run build
+
+build: web-build
 	go build -o $(BINARY) .
 
 run: build
@@ -13,7 +16,7 @@ dev:
 	air
 
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) web/app.js
 
 docker-build:
 	docker build -t $(BINARY) .
@@ -30,8 +33,11 @@ deploy: docker-build
 deploy-prod:
 	docker compose -f docker-compose.prod.yml up -d --pull always
 
-test:
+test: web-build
 	go test ./... -count=1
+
+web-test:
+	npm test
 
 vet:
 	go vet ./...

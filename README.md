@@ -27,17 +27,23 @@ Open `http://localhost:8080`, select a speaker, and press play.
 ## Development
 
 ```bash
-# Run tests
+# Install frontend dependencies
+npm install
+
+# Run all tests (Go + frontend)
 make test
+make web-test
 
 # Lint
 make vet
 
-# Hot-reload (requires air)
+# Hot-reload (requires air) — watches Go, TS, and HTML files
 make dev
 ```
 
-CI runs `go vet` and `make test` on every push/PR to `main` via GitHub Actions.
+The frontend is written in TypeScript under `web/src/` and bundled with esbuild into `web/app.js` (gitignored). The `make build` and `make test` targets handle this automatically.
+
+CI runs `npm test`, `npm run build`, `go vet`, and `make test` on every push/PR to `main` via GitHub Actions.
 
 ## Configuration
 
