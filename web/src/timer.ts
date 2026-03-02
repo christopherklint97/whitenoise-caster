@@ -16,8 +16,6 @@ let timerDismissBtn: HTMLButtonElement;
 let timerActStop: HTMLButtonElement;
 let timerActVol: HTMLButtonElement;
 let timerVolRow: HTMLElement;
-let timerVolSlider: HTMLInputElement;
-let timerVolLabel: HTMLElement;
 let wheelHours: HTMLElement;
 let wheelMinutes: HTMLElement;
 
@@ -106,8 +104,6 @@ export function initTimer(): void {
   timerActStop = document.getElementById('timerActStop') as HTMLButtonElement;
   timerActVol = document.getElementById('timerActVol') as HTMLButtonElement;
   timerVolRow = document.getElementById('timerVolRow')!;
-  timerVolSlider = document.getElementById('timerVolSlider') as HTMLInputElement;
-  timerVolLabel = document.getElementById('timerVolLabel')!;
   wheelHours = document.getElementById('wheelHours')!;
   wheelMinutes = document.getElementById('wheelMinutes')!;
 
@@ -145,10 +141,6 @@ export function initTimer(): void {
     timerVolRow.classList.add('visible');
   });
 
-  timerVolSlider.addEventListener('input', () => {
-    timerVolLabel.textContent = timerVolSlider.value + '%';
-  });
-
   timerSetBtn.addEventListener('click', async () => {
     const hours = getWheelValue(wheelHours);
     const minutes = getWheelValue(wheelMinutes);
@@ -157,7 +149,7 @@ export function initTimer(): void {
 
     const body: TimerRequest = { duration_s: totalS, action: timerActionMode };
     if (timerActionMode === 'volume') {
-      body.volume_level = parseInt(timerVolSlider.value) / 100;
+      body.volume_level = 0.2;
     }
 
     try {
