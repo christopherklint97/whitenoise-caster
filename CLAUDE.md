@@ -1,7 +1,7 @@
 # Whitenoise Caster
 
 ## Project Overview
-Go service that casts looped white noise to Chromecast/Google Home speakers via a mobile-first web UI. Runs on a Hetzner VPS, reaches Chromecasts through an OpenVPN tunnel to an Archer AX1800 router (v1.2). Audio served publicly via HTTPS.
+Go service that casts looped white noise to Chromecast/Google Home speakers via a mobile-first web UI. Runs on a Raspberry Pi on the home LAN, with Cloudflare Tunnel for public HTTPS access. Audio served directly over LAN to Chromecasts.
 
 ## Tech Stack
 - **Language**: Go 1.25+
@@ -9,7 +9,7 @@ Go service that casts looped white noise to Chromecast/Google Home speakers via 
 - **Config**: gopkg.in/yaml.v3
 - **Web UI**: TypeScript (esbuild bundle) + vanilla HTML/CSS, embedded via `//go:embed`
 - **Frontend tooling**: esbuild (bundler), vitest + jsdom (tests)
-- **Deployment**: Docker + Caddy (auto HTTPS)
+- **Deployment**: Docker on Raspberry Pi + Cloudflare Tunnel (HTTPS)
 
 ## Project Structure
 ```
@@ -28,12 +28,10 @@ vitest.config.ts     — vitest config (jsdom environment)
 config.example.yaml       — example configuration (committed)
 config.prod.yaml          — production config with credentials (gitignored)
 Dockerfile                — multi-stage build (Node.js frontend + Go backend)
-docker-compose.yml        — dev: app + caddy with Docker networks
-docker-compose.prod.yml   — prod: host networking for OpenVPN tunnel access
-Caddyfile                 — dev reverse proxy config (example domain)
-Caddyfile.prod            — prod reverse proxy with real domain (gitignored)
+docker-compose.yml        — dev: app service only
+docker-compose.prod.yml   — prod: app + watchtower
 Makefile                  — build targets (deploy-prod for production)
-docs/deployment.md        — full deployment guide
+docs/deployment.md        — full deployment guide (Raspberry Pi + Cloudflare Tunnel)
 .github/workflows/        — CI (vet + test on push/PR to main)
 ```
 

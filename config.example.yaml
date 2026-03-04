@@ -9,9 +9,10 @@ speakers:
 # Path to the white noise MP3 file served by this application
 audio_file: "whitenoise.mp3"
 
-# Public base URL where the Chromecast can reach this server
+# Base URL where the Chromecast can reach this server
+# Since the Pi and Chromecasts are on the same LAN, use the Pi's LAN IP
 # The Chromecast will fetch: {audio_url}/audio/{secret_path}/whitenoise.mp3
-audio_url: "http://192.168.1.1:8080"
+audio_url: "http://192.168.1.x:8080"
 
 # Address to listen on
 listen_addr: ":8080"

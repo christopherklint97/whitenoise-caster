@@ -20,12 +20,6 @@ tmp/
 config.yaml
 config.prod.yaml
 
-# Production Caddyfile (use Caddyfile as a template)
-Caddyfile.prod
-
-# OpenVPN
-*.ovpn
-
 # Frontend build output
 web/app.js
 node_modules/

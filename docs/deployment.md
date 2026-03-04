@@ -1,173 +1,113 @@
 # Deployment Guide
 
-Whitenoise Caster runs on a Hetzner VPS and reaches Chromecasts on a home LAN through an OpenVPN tunnel provided by a TP-Link Archer AX1800 (hardware v1.2).
+Whitenoise Caster runs on a Raspberry Pi on the home LAN. A Cloudflare Tunnel provides public HTTPS access for the web UI. Chromecasts fetch audio directly from the Pi over LAN.
 
 ## Architecture
 
 ```
-┌──────────────────────┐       OpenVPN tunnel       ┌───────────────────────┐
-│  Hetzner VPS         │◄──────────────────────────►│  Archer AX1800 (v1.2) │
-│  (OpenVPN client)    │       10.8.0.x             │  (OpenVPN server)     │
-│                      │                             │                       │
-│  Docker (host net):  │                             │  Home LAN:            │
-│  - app    (:8080)    │─── TCP 8009 ──────────────►│  - Speaker A          │
-│  - caddy  (:80/443)  │    via 192.168.0.x         │    192.168.0.x        │
-│                      │                             │  - Speaker B          │
-│                      │◄── HTTPS audio fetch ──────│    192.168.0.x        │
-└──────────────────────┘                             └───────────────────────┘
-         ▲
-         │ HTTPS
-         │ noise.example.com
-    Your phone
+                    Cloudflare Tunnel
+Internet ◄──────────────────────────────► Raspberry Pi (home LAN)
+                                          192.168.1.x
+  Your phone                              Docker:
+  noise.example.com ──► Cloudflare ──►    - app (:8080)
+                        (HTTPS)           - watchtower
+
+                                          Also on LAN:
+                                          - Speaker A (192.168.1.100)
+                                          - Speaker B (192.168.1.101)
 ```
 
-**Why OpenVPN instead of WireGuard?** The Archer AX1800 hardware v1.2 does not support WireGuard. V1 firmware only provides OpenVPN and PPTP VPN servers. OpenVPN is the secure choice of the two.
+**Key insight:** The Pi is on the same LAN as the Chromecasts, so cast control (TCP 8009) and audio fetching happen directly over the local network — no VPN or tunneling needed for that path. Cloudflare Tunnel only handles external web UI access.
 
 ## Prerequisites
 
-- Hetzner VPS (any plan with a public IPv4)
-- Domain with DNS managed somewhere you can add an A record
-- TP-Link Archer AX1800 (v1.2) with latest firmware
-- **A public IP from your ISP** (not behind CGNAT — see below)
+- Raspberry Pi (3B+ or newer) with Raspberry Pi OS (64-bit recommended)
+- Docker and Docker Compose installed on the Pi
 - A `whitenoise.mp3` audio file
-- SSH access to the VPS
+- A domain with DNS managed by Cloudflare
+- A Cloudflare account (free tier works)
 
-### CGNAT Check (Important)
+## Step 1: Set Up the Raspberry Pi
 
-The VPS connects **inbound** to the router's OpenVPN server. This requires your home router to have a real public IP. Many ISPs use Carrier-Grade NAT (CGNAT), which makes inbound connections impossible.
+### Install Raspberry Pi OS
 
-**To check if you're behind CGNAT:**
+Use the [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to flash Raspberry Pi OS Lite (64-bit) to an SD card. Enable SSH during setup.
 
-1. Log in to the router admin panel at `http://192.168.0.1`
-2. Go to **Network > Internet** and note the **IP Address** (WAN IP)
-3. From a device on your home WiFi, visit `https://ifconfig.me` and note the public IP
-
-If the WAN IP and public IP **match** — you have a real public IP. You're good.
-
-If the WAN IP is **different** (typically in the `100.64.0.0/10` range, e.g. `100.x.x.x`) — you're behind CGNAT. Contact your ISP and request a public IP address. Some ISPs provide this for free, others charge a small fee. Without a public IP, the VPS cannot reach the router's VPN server.
-
-## Step 1: Configure Dynamic DNS on the Router
-
-If your ISP assigns a dynamic public IP (most do), set up DDNS so the VPS can always find the router:
-
-1. On the router, go to **Advanced > Network > Dynamic DNS**
-2. TP-Link provides a free built-in DDNS service — register a hostname (e.g. `myhome.tplinkdns.com`)
-3. Enable the DDNS entry and save
-
-Verify from any machine:
+### Install Docker
 
 ```bash
-dig +short myhome.tplinkdns.com
-# Should return your home public IP
-```
+ssh pi@<PI_IP>
 
-## Step 2: Configure OpenVPN Server on the Router
-
-1. Open the router admin panel at `http://192.168.0.1`
-2. Log in with your TP-Link ID or router password
-3. Navigate to **Advanced > VPN Server > OpenVPN**
-4. Check **Enable VPN Server**
-5. Set **Service Type** to **UDP** and **Service Port** to **1194** (default)
-6. Set **VPN Subnet/Netmask** to `10.8.0.0 / 255.255.255.0`
-7. Set **Client Access** to **Home Network Only** (the VPS only needs to reach LAN devices)
-8. Click **Generate** to create a certificate (if not already done)
-9. Click **Save**
-10. Click **Export** to download the `.ovpn` client configuration file
-
-The exported `.ovpn` file contains the server address, certificates, and keys needed for the VPS to connect.
-
-**Edit the exported `.ovpn` file:** Replace the IP in the `remote` line with your DDNS hostname:
-
-```
-remote myhome.tplinkdns.com 1194
-```
-
-### If port 1194 is blocked
-
-Some ISPs block well-known VPN ports. If the VPS can't connect on 1194:
-
-1. Try a different port on the router (e.g. `51194`) — the Archer restricts ports to 1024-65535
-2. Test reachability from the VPS: `nmap -Pn -sU -p 51194 myhome.tplinkdns.com`
-3. Update both the router's Service Port and the `remote` line in the `.ovpn` file
-
-## Step 3: Provision the Hetzner VPS
-
-### System setup
-
-```bash
-ssh root@<VPS_IP>
-
-# Update system
-apt update && apt upgrade -y
-
-# Install OpenVPN
-apt install -y openvpn
-
-# Install Docker
 curl -fsSL https://get.docker.com | sh
-systemctl enable --now docker
-
-# Install Docker Compose plugin
-apt install -y docker-compose-plugin
+sudo usermod -aG docker $USER
+# Log out and back in for group change to take effect
 ```
 
-### Firewall (if ufw is active)
+### Assign a static IP
+
+Give the Pi a static LAN IP so the Chromecast audio URL doesn't change. Configure this in your router's DHCP reservation settings (preferred) or in the Pi's network config.
+
+## Step 2: Set Up Cloudflare Tunnel
+
+Cloudflare Tunnel (`cloudflared`) creates an outbound connection from the Pi to Cloudflare's edge, so no inbound ports need to be opened on your router.
+
+### Install cloudflared
 
 ```bash
-ufw allow 22/tcp    # SSH
-ufw allow 80/tcp    # HTTP (Caddy redirect to HTTPS)
-ufw allow 443/tcp   # HTTPS
-ufw enable
+# On the Pi
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o /usr/local/bin/cloudflared
+chmod +x /usr/local/bin/cloudflared
 ```
 
-No inbound VPN port is needed on the VPS since it acts as the OpenVPN **client** connecting outbound to the router.
-
-## Step 4: Install OpenVPN Client on the VPS
-
-1. Copy the `.ovpn` file exported from the router to the VPS:
+### Authenticate and create a tunnel
 
 ```bash
-scp ~/Downloads/client.ovpn root@<VPS_IP>:/etc/openvpn/client.conf
+cloudflared tunnel login
+# This opens a browser to authorize with your Cloudflare account
+
+cloudflared tunnel create whitenoise
+# Note the tunnel ID (e.g., abc123-def456-...)
 ```
 
-> The file must be named `client.conf` (not `.ovpn`) for systemd to manage it.
+### Configure the tunnel
 
-2. Enable and start the OpenVPN client service:
+Create `/etc/cloudflared/config.yml`:
+
+```yaml
+tunnel: <TUNNEL_ID>
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: noise.example.com
+    service: http://localhost:8080
+  - service: http_status:404
+```
+
+Replace `noise.example.com` with your actual domain and `<TUNNEL_ID>` with the ID from the create step.
+
+### Add a DNS route
 
 ```bash
-systemctl enable --now openvpn@client
+cloudflared tunnel route dns whitenoise noise.example.com
 ```
 
-3. Verify the tunnel is up:
+This creates a CNAME record in Cloudflare DNS pointing your domain to the tunnel.
+
+### Run as a systemd service
 
 ```bash
-# Check the tunnel interface exists
-ip addr show tun0
-
-# Ping the router's LAN IP through the tunnel
-ping -c 3 192.168.0.1
+cloudflared service install
+systemctl enable --now cloudflared
 ```
-
-If the ping succeeds, your VPS can reach your home LAN. If it fails, see the Troubleshooting section below.
-
-## Step 5: DNS Record
-
-Add an A record for your domain pointing to the Hetzner VPS public IP:
-
-```
-noise.example.com  →  A  →  <VPS_PUBLIC_IP>
-```
-
-Set this up wherever you manage DNS. TTL of 300 (5 min) is fine.
 
 Verify:
 
 ```bash
-dig +short noise.example.com
-# Should return your VPS IP
+systemctl status cloudflared
+curl https://noise.example.com  # should reach the app once deployed
 ```
 
-## Step 6: Deploy the Application
+## Step 3: Deploy the Application
 
 ### Clone the repo
 
@@ -180,40 +120,19 @@ cd /opt/whitenoise-caster
 
 ```bash
 # From your local machine
-scp whitenoise.mp3 root@<VPS_IP>:/opt/whitenoise-caster/
+scp whitenoise.mp3 pi@<PI_IP>:/opt/whitenoise-caster/
 ```
 
 ### Create the production config
-
-Create the production config and Caddyfile from the examples:
 
 ```bash
 cp config.example.yaml config.prod.yaml
 nano config.prod.yaml
 ```
 
-Fill in your real speaker IPs (on the `192.168.0.x` subnet), set `audio_url` to your real domain, and set `auth.username` / `auth.password`.
+Set your speaker IPs, set `audio_url` to `http://<PI_LAN_IP>:8080` (Chromecasts fetch audio over LAN, not through the tunnel), and set `auth.username` / `auth.password`.
 
-```bash
-cp Caddyfile Caddyfile.prod
-nano Caddyfile.prod
-```
-
-Replace `noise.example.com` with your real domain and change `app:8080` to `localhost:8080` (since production uses host networking).
-
-Both files are gitignored — do not commit them.
-
-### Production files
-
-The production compose file uses `network_mode: host` so the app and Caddy share the VPS network stack. This gives the app direct access to the `tun0` interface (OpenVPN tunnel) to reach Chromecasts, and lets Caddy bind to ports 80/443 directly. Watchtower runs alongside to auto-pull new images from GHCR.
-
-| File | Purpose | Committed? |
-|------|---------|------------|
-| `docker-compose.prod.yml` | Production compose (host networking + watchtower) | Yes |
-| `config.example.yaml` | Template for creating config files | Yes |
-| `Caddyfile` | Template Caddyfile (example domain) | Yes |
-| `config.prod.yaml` | Production config with credentials | **No** (gitignored) |
-| `Caddyfile.prod` | Production Caddyfile with real domain | **No** (gitignored) |
+`config.prod.yaml` is gitignored — do not commit it.
 
 ### Authenticate with GHCR
 
@@ -244,7 +163,10 @@ docker compose -f docker-compose.prod.yml ps
 # Watch logs
 docker compose -f docker-compose.prod.yml logs -f
 
-# Test the API
+# Test locally on the Pi
+curl http://localhost:8080/api/status
+
+# Test through the tunnel
 curl https://noise.example.com/api/status
 ```
 
@@ -252,26 +174,16 @@ curl https://noise.example.com/api/status
 
 When you hit "Play" in the web UI:
 
-1. Your phone sends `POST /api/play` to `noise.example.com` (Hetzner VPS)
-2. Caddy terminates TLS and proxies to the app on `localhost:8080`
-3. The app connects to the Chromecast at `192.168.0.x:8009` through the OpenVPN tunnel (`tun0`)
-4. The app tells the Chromecast to load audio from `https://noise.example.com/audio/<secret>/whitenoise.mp3`
-5. The Chromecast fetches the audio over the public internet (Chromecast -> Google DNS -> your VPS)
+1. Your phone sends `POST /api/play` to `noise.example.com`
+2. Cloudflare Tunnel forwards the request to the Pi's app on `localhost:8080`
+3. The app connects to the Chromecast at `192.168.1.x:8009` directly over LAN
+4. The app tells the Chromecast to load audio from `http://<PI_IP>:8080/audio/<secret>/whitenoise.mp3`
+5. The Chromecast fetches the audio directly from the Pi over LAN (no internet round-trip)
 6. The app's monitor loop polls the Chromecast every 3s and re-loads the track when it finishes (looping)
 
-## Maintenance
+## Updating
 
-### Restarting
-
-```bash
-cd /opt/whitenoise-caster
-docker compose -f docker-compose.prod.yml restart        # restart containers
-docker compose -f docker-compose.prod.yml up -d --build  # rebuild and restart
-```
-
-### Updating
-
-Updates happen automatically. When you push to `main`, GitHub Actions builds and pushes a new image to GHCR. Watchtower (running on the VPS) checks for new images every 5 minutes and restarts the container when one is found.
+Updates happen automatically. When you push to `main`, GitHub Actions builds and pushes a new image to GHCR. Watchtower (running on the Pi) checks for new images every 5 minutes and restarts the container when one is found.
 
 To manually trigger an update:
 
@@ -281,106 +193,40 @@ docker compose -f docker-compose.prod.yml pull app
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-### Checking the VPN tunnel
+## Maintenance
+
+### Restarting
 
 ```bash
-# OpenVPN status
-systemctl status openvpn@client
-
-# Tunnel interface
-ip addr show tun0
-
-# Test connectivity to home LAN
-ping 192.168.0.1
+cd /opt/whitenoise-caster
+docker compose -f docker-compose.prod.yml restart
 ```
 
 ### Viewing logs
 
 ```bash
-# App + Caddy logs
+# App logs
 docker compose -f docker-compose.prod.yml logs -f
 
-# OpenVPN logs
-journalctl -u openvpn@client -f
+# Cloudflare Tunnel logs
+journalctl -u cloudflared -f
 ```
 
 ## Troubleshooting
 
-### VPN tunnel won't connect
-
-**Check the basics:**
-
-```bash
-# On the VPS — check OpenVPN client status
-systemctl status openvpn@client
-journalctl -u openvpn@client -n 50 --no-pager
-
-# Verify the TUN kernel module is loaded
-lsmod | grep tun
-# If empty: sudo modprobe tun
-```
-
-**TLS handshake timeout (most common issue):**
-
-If you see `TLS Error: TLS key negotiation failed to occur within 60 seconds`, the VPS cannot reach the router's OpenVPN server. Check in this order:
-
-1. **CGNAT** — Verify you have a real public IP (see CGNAT Check above). This is the most common cause. If your router's WAN IP is in `100.64.0.0/10`, no inbound connections will work.
-
-2. **DDNS stale** — Check that your DDNS hostname resolves to your actual public IP:
-   ```bash
-   dig +short myhome.tplinkdns.com
-   ```
-   Compare with your actual IP at `https://ifconfig.me` from your home network.
-
-3. **OpenVPN server down on router** — Log in to the router admin panel and check **Advanced > VPN Server > OpenVPN** is enabled. Toggle it off and on if needed. Try rebooting the router.
-
-4. **Port blocked by ISP** — Test reachability from the VPS:
-   ```bash
-   nmap -Pn -sU -p 1194 myhome.tplinkdns.com
-   ```
-   If closed, try a different port (see "If port 1194 is blocked" above).
-
-5. **Test from LAN** — Install the OpenVPN Connect app on your phone, import the `.ovpn` config with `remote 192.168.0.1 1194`, and test from your home WiFi. If this works but the VPS can't connect, the issue is between the internet and your router (CGNAT, ISP firewall, or port blocking).
-
-**VPN connected but `tun0` missing:**
-
-```bash
-# Check all tunnel interfaces
-ip addr | grep -E "tun|tap"
-
-# Ensure TUN module is loaded
-sudo modprobe tun
-sudo systemctl restart openvpn@client
-```
-
-### Other issues
-
 | Symptom | Check |
 |---------|-------|
-| VPN connects but no LAN access | Router VPN setting must be "Home Network Only" or "Internet and Home Network" — verify client access mode |
-| Chromecast can't fetch audio | The audio URL must be publicly reachable. Test: `curl https://noise.example.com/audio/<secret>/whitenoise.mp3 -I` from any network |
-| Caddy won't start | Port 80 or 443 already in use? Check with `ss -tlnp | grep -E ':80\|:443'` |
-| TLS cert fails | DNS must be propagated. Check: `dig +short noise.example.com`. Caddy needs port 80 open for the ACME HTTP challenge |
-| App starts but "connect: connection refused" | Chromecast may be off or on a different IP. Verify IPs in `config.yaml` match actual devices |
-
-### VPS firewall reference
-
-The VPS only needs these ports open:
-
-```bash
-ufw status
-# 22/tcp   — SSH
-# 80/tcp   — HTTP (Caddy ACME + redirect)
-# 443/tcp  — HTTPS
-```
-
-No inbound VPN port is needed. The VPS connects **outbound** to the router as an OpenVPN client. UFW's default rules allow established/related return traffic.
+| Tunnel not connecting | `systemctl status cloudflared` and check `/etc/cloudflared/config.yml` |
+| Domain not resolving | Verify CNAME exists: `dig +short noise.example.com` should return a `cfargotunnel.com` address |
+| App unreachable through tunnel | Ensure app is running on port 8080: `curl http://localhost:8080/api/status` |
+| Chromecast can't fetch audio | `audio_url` must use the Pi's LAN IP, not the public domain. Test: `curl http://<PI_IP>:8080/audio/<secret>/whitenoise.mp3 -I` from a LAN device |
+| Cast control fails | Chromecast may be off or on a different IP. Verify IPs in `config.prod.yaml` match actual devices. Try `ping 192.168.1.x` from the Pi |
+| Watchtower not pulling | Check GHCR auth: `docker pull ghcr.io/christopherklint97/whitenoise-caster:latest` |
 
 ## Security Notes
 
 - The audio endpoint is **intentionally unauthenticated** — the Chromecast needs to fetch it without credentials. The `secret_path` in the URL provides obscurity.
 - All other API endpoints are behind basic auth.
-- Caddy enforces HTTPS with automatic certificate management.
-- The OpenVPN tunnel encrypts all traffic between the VPS and your home network.
-- `config.prod.yaml` is gitignored. Never commit files containing credentials. Use `config.example.yaml` as a template.
-- The router's SPI Firewall should remain enabled. "Respond to Pings from WAN" can stay disabled — it's not needed for OpenVPN.
+- Cloudflare Tunnel provides HTTPS termination and DDoS protection.
+- No inbound ports need to be opened on your router — the tunnel connects outbound.
+- `config.prod.yaml` is gitignored. Never commit files containing credentials.

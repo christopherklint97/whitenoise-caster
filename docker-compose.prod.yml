@@ -2,19 +2,11 @@ services:
   app:
     image: ghcr.io/christopherklint97/whitenoise-caster:latest
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "8080:8080"
     volumes:
       - ./config.prod.yaml:/app/config.yaml:ro
       - ./whitenoise.mp3:/app/whitenoise.mp3:ro
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
 
   watchtower:
     image: nickfedor/watchtower
@@ -23,7 +15,3 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ~/.docker/config.json:/config.json:ro
     command: --interval 300 --cleanup
-
-volumes:
-  caddy_data:
-  caddy_config:
