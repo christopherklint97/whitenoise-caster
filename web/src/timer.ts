@@ -2,7 +2,7 @@ import type { StatusResponse, TimerRequest } from './types';
 import { setTimer, cancelTimer } from './api';
 import { pollStatus } from './ui';
 
-let timerActionMode: 'stop' | 'volume' = 'stop';
+let timerActionMode: 'stop' | 'volume' = 'volume';
 
 // DOM refs (assigned in initTimer)
 let timerToggleBtn: HTMLButtonElement;
