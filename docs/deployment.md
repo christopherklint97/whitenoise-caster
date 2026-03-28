@@ -10,7 +10,7 @@ Internet ◄──────────────────────�
                                           192.168.1.x
   Your phone                              Docker:
   noise.example.com ──► Cloudflare ──►    - app (:8080)
-                        (HTTPS)           - watchtower
+                        (HTTPS)
 
                                           Also on LAN:
                                           - Speaker A (192.168.1.100)
@@ -134,24 +134,12 @@ Set your speaker IPs, set `audio_url` to `http://<PI_LAN_IP>:8080` (Chromecasts 
 
 `config.prod.yaml` is gitignored — do not commit it.
 
-### Authenticate with GHCR
-
-The app image is pushed to GitHub Container Registry by CI. Log in so Docker (and Watchtower) can pull it:
-
-```bash
-# Create a GitHub Personal Access Token (classic) with `read:packages` scope
-# at https://github.com/settings/tokens
-echo "<YOUR_GHCR_TOKEN>" | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
-```
-
-This writes credentials to `~/.docker/config.json`, which Watchtower also reads.
-
 ### Start everything
 
 ```bash
 cd /opt/whitenoise-caster
 make deploy-prod
-# or: docker compose -f docker-compose.prod.yml up -d --pull always
+# or: docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ### Verify
@@ -183,14 +171,13 @@ When you hit "Play" in the web UI:
 
 ## Updating
 
-Updates happen automatically. When you push to `main`, GitHub Actions builds and pushes a new image to GHCR. Watchtower (running on the Pi) checks for new images every 5 minutes and restarts the container when one is found.
-
-To manually trigger an update:
+Pull the latest code and rebuild locally:
 
 ```bash
 cd /opt/whitenoise-caster
-docker compose -f docker-compose.prod.yml pull app
-docker compose -f docker-compose.prod.yml up -d
+git pull
+make deploy-prod
+# or: docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ## Maintenance
@@ -221,7 +208,7 @@ journalctl -u cloudflared -f
 | App unreachable through tunnel | Ensure app is running on port 8080: `curl http://localhost:8080/api/status` |
 | Chromecast can't fetch audio | `audio_url` must use the Pi's LAN IP, not the public domain. Test: `curl http://<PI_IP>:8080/audio/<secret>/whitenoise.mp3 -I` from a LAN device |
 | Cast control fails | Chromecast may be off or on a different IP. Verify IPs in `config.prod.yaml` match actual devices. Try `ping 192.168.1.x` from the Pi |
-| Watchtower not pulling | Check GHCR auth: `docker pull ghcr.io/christopherklint97/whitenoise-caster:latest` |
+| Build fails on Pi | Check Docker and disk space: `docker system df`, `df -h` |
 
 ## Security Notes
 

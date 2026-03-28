@@ -28,7 +28,7 @@ docker-down:
 	docker compose down
 
 deploy-prod:
-	docker compose -f docker-compose.prod.yml up -d --pull always
+	docker compose -f docker-compose.prod.yml up -d --build
 
 test: web-build
 	go test ./... -count=1

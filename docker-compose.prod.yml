@@ -1,17 +1,10 @@
 services:
   app:
-    image: ghcr.io/christopherklint97/whitenoise-caster:latest
+    build: .
+    image: whitenoise-caster
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       - ./config.prod.yaml:/app/config.yaml:ro
       - ./whitenoise.mp3:/app/whitenoise.mp3:ro
-
-  watchtower:
-    image: nickfedor/watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ~/.docker/config.json:/config.json:ro
-    command: --interval 300 --cleanup

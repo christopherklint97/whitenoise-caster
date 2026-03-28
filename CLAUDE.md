@@ -29,7 +29,7 @@ config.example.yaml       — example configuration (committed)
 config.prod.yaml          — production config with credentials (gitignored)
 Dockerfile                — multi-stage build (Node.js frontend + Go backend)
 docker-compose.yml        — dev: app service only
-docker-compose.prod.yml   — prod: app + watchtower
+docker-compose.prod.yml   — prod: app service
 Makefile                  — build targets (deploy-prod for production)
 docs/deployment.md        — full deployment guide (Raspberry Pi + Cloudflare Tunnel)
 .github/workflows/        — CI (vet + test on push/PR to main)
