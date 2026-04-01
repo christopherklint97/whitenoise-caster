@@ -469,7 +469,7 @@ func TestHandleVolume(t *testing.T) {
 		}
 		mux := setupHandler(t, mock, nil)
 
-		body := `{"level":0.3}`
+		body := `{"level":0.25}`
 		req := httptest.NewRequest("POST", "/api/volume", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -478,8 +478,8 @@ func TestHandleVolume(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 		}
-		if gotLevel != 0.3 {
-			t.Errorf("level: want 0.3, got %f", gotLevel)
+		if gotLevel != 0.25 {
+			t.Errorf("level: want 0.25, got %f", gotLevel)
 		}
 	})
 

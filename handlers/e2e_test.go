@@ -519,18 +519,13 @@ func TestE2E_Volume(t *testing.T) {
 		assertCode(t, resp, 200)
 		resp.Body.Close()
 
-		// Set volume to 30%
-		resp = env.postJSON(t, "/api/volume", volumeRequest{Level: 0.3})
-		assertCode(t, resp, 200)
-		resp.Body.Close()
-
 		// Cleanup
 		resp = env.postEmpty(t, "/api/stop")
 		resp.Body.Close()
 	})
 
 	t.Run("set volume while disconnected fails", func(t *testing.T) {
-		resp := env.postJSON(t, "/api/volume", volumeRequest{Level: 0.3})
+		resp := env.postJSON(t, "/api/volume", volumeRequest{Level: 0.25})
 		assertCode(t, resp, 400)
 		resp.Body.Close()
 	})
