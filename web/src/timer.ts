@@ -149,7 +149,7 @@ export function initTimer(): void {
 
     const body: TimerRequest = { duration_s: totalS, action: timerActionMode };
     if (timerActionMode === 'volume') {
-      body.volume_level = 0.1;
+      body.volume_level = 0.05;
     }
 
     try {
