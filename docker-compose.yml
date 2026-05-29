@@ -7,3 +7,18 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./whitenoise.mp3:/app/whitenoise.mp3:ro
+
+  watchdog:
+    image: curlimages/curl:8.11.0
+    restart: unless-stopped
+    depends_on:
+      - app
+    entrypoint: ["sh", "/watchdog.sh"]
+    volumes:
+      - ./watchdog.sh:/watchdog.sh:ro
+    environment:
+      APP_URL: "http://app:8080"
+      INTERVAL: "30"
+      FALLBACK_SPEAKER_IP: "192.168.0.151"
+      WN_USER: "${WN_USER}"
+      WN_PASS: "${WN_PASS}"

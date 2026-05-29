@@ -384,8 +384,22 @@ func (c *Controller) monitorLoop(ctx context.Context, speakerIP, speakerName str
 			c.mu.Lock()
 
 			if c.client == nil {
+				// A nil client with a still-live loop context means the
+				// connection was lost and a prior reconnect exhausted its
+				// retries (leaving StateError) — NOT a clean Stop(), which
+				// also cancels the context and is caught by the case above
+				// and resets status to disconnected. Keep retrying so the
+				// white-noise appliance self-heals after a network blip
+				// instead of going silent until a manual restart.
+				if c.status.State == StateDisconnected {
+					c.mu.Unlock()
+					return
+				}
+				c.log.Info("connection lost, attempting recovery reconnect",
+					"speaker", speakerName, "ip", speakerIP)
+				c.reconnect(ctx, speakerIP, speakerName)
 				c.mu.Unlock()
-				return
+				continue
 			}
 
 			if c.status.State == StatePaused {
