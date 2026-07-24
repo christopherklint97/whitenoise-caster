@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { formatCountdown, getWheelValue } from '../timer';
+import { buildTimerRequest, formatCountdown, getWheelValue } from '../timer';
+
+describe('buildTimerRequest', () => {
+  it('sets volume sleep timers to the lowest 3% preset', () => {
+    expect(buildTimerRequest(1800, 'volume')).toEqual({
+      duration_s: 1800,
+      action: 'volume',
+      volume_level: 0.03,
+    });
+  });
+
+  it('does not send a volume for stop timers', () => {
+    expect(buildTimerRequest(1800, 'stop')).toEqual({
+      duration_s: 1800,
+      action: 'stop',
+    });
+  });
+});
 
 describe('formatCountdown', () => {
   it('returns 00:00 for zero', () => {

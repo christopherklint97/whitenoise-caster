@@ -14,12 +14,14 @@ type mockClient struct {
 	loadMediaFunc    func(ctx context.Context, url, contentType string) error
 	setMutedFunc     func(ctx context.Context, muted bool) error
 	setVolumeFunc    func(ctx context.Context, level float32) error
+	stopMediaFunc    func(ctx context.Context) error
 	playFunc         func(ctx context.Context) error
 	pauseFunc        func(ctx context.Context) error
 	getMediaStatFunc func(ctx context.Context) (*mediaStatus, error)
 	closeFunc        func()
 
 	closeCalled atomic.Int32
+	stopCalled  atomic.Int32
 }
 
 func (m *mockClient) LoadMedia(ctx context.Context, url, contentType string) error {
@@ -39,6 +41,14 @@ func (m *mockClient) SetMuted(ctx context.Context, muted bool) error {
 func (m *mockClient) SetVolume(ctx context.Context, level float32) error {
 	if m.setVolumeFunc != nil {
 		return m.setVolumeFunc(ctx, level)
+	}
+	return nil
+}
+
+func (m *mockClient) StopMedia(ctx context.Context) error {
+	m.stopCalled.Add(1)
+	if m.stopMediaFunc != nil {
+		return m.stopMediaFunc(ctx)
 	}
 	return nil
 }
@@ -82,6 +92,50 @@ func newTestController(dial func(ctx context.Context, ip string) (castClient, er
 	}
 	c.dialAndLaunch = dial
 	return c
+}
+
+func TestStopSendsMediaStopBeforeClosingConnection(t *testing.T) {
+	mock := &mockClient{}
+	c := newTestController(nil)
+	c.client = mock
+	c.status = Status{State: StatePlaying, SpeakerIP: "192.168.1.1", SpeakerName: "Bedroom"}
+
+	if err := c.Stop(); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+
+	if got := mock.stopCalled.Load(); got != 1 {
+		t.Fatalf("expected StopMedia to be called once, got %d", got)
+	}
+	if got := mock.closeCalled.Load(); got != 1 {
+		t.Fatalf("expected Close to be called once, got %d", got)
+	}
+	if got := c.GetStatus().State; got != StateDisconnected {
+		t.Fatalf("expected disconnected status, got %q", got)
+	}
+}
+
+func TestSleepTimerStopSendsMediaStop(t *testing.T) {
+	mock := &mockClient{}
+	c := newTestController(nil)
+	c.client = mock
+	c.status = Status{State: StatePlaying, SpeakerIP: "192.168.1.1", SpeakerName: "Bedroom"}
+
+	if err := c.SetTimer(1, TimerActionStop, 0); err != nil {
+		t.Fatalf("SetTimer returned error: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for mock.stopCalled.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if got := mock.stopCalled.Load(); got != 1 {
+		t.Fatalf("expected timer to call StopMedia once, got %d", got)
+	}
+	if got := c.GetStatus().State; got != StateDisconnected {
+		t.Fatalf("expected disconnected status after timer, got %q", got)
+	}
 }
 
 func TestReconnect_SucceedsFirstAttempt(t *testing.T) {

@@ -46,6 +46,7 @@ type castClient interface {
 	LoadMedia(ctx context.Context, url, contentType string) error
 	SetMuted(ctx context.Context, muted bool) error
 	SetVolume(ctx context.Context, level float32) error
+	StopMedia(ctx context.Context) error
 	Play(ctx context.Context) error
 	Pause(ctx context.Context) error
 	GetMediaStatus(ctx context.Context) (*mediaStatus, error)
@@ -232,6 +233,14 @@ func (c *Controller) stopLocked() {
 		c.cancelLoop = nil
 	}
 	if c.client != nil {
+		// Closing a CASTV2 sender connection does not stop media already
+		// playing on the receiver. Send an explicit media STOP first so both
+		// manual stops and sleep-timer stops actually silence the speaker.
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := c.client.StopMedia(stopCtx); err != nil {
+			c.log.Warn("failed to stop media before disconnect", "error", err)
+		}
+		cancel()
 		c.client.Close()
 		c.client = nil
 	}

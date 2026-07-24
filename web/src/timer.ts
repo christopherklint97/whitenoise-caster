@@ -4,6 +4,17 @@ import { pollStatus } from './ui';
 
 let timerActionMode: 'stop' | 'volume' = 'volume';
 
+export const SLEEP_TIMER_VOLUME = 0.03;
+
+export function buildTimerRequest(
+  durationS: number,
+  action: 'stop' | 'volume',
+): TimerRequest {
+  const request: TimerRequest = { duration_s: durationS, action };
+  if (action === 'volume') request.volume_level = SLEEP_TIMER_VOLUME;
+  return request;
+}
+
 // DOM refs (assigned in initTimer)
 let timerToggleBtn: HTMLButtonElement;
 let timerSetup: HTMLElement;
@@ -147,10 +158,7 @@ export function initTimer(): void {
     const totalS = hours * 3600 + minutes * 60;
     if (totalS < 1) return;
 
-    const body: TimerRequest = { duration_s: totalS, action: timerActionMode };
-    if (timerActionMode === 'volume') {
-      body.volume_level = 0.05;
-    }
+    const body = buildTimerRequest(totalS, timerActionMode);
 
     try {
       const res = await setTimer(body);
