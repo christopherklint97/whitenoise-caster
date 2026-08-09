@@ -47,6 +47,17 @@ func main() {
 
 	controller := cast.NewController(logger, cfg.FullAudioURL())
 
+	if cfg.DailyStop.Time != "" {
+		hour, minute, location, err := parseDailyStop(cfg.DailyStop.Time, cfg.DailyStop.Timezone)
+		if err != nil {
+			logger.Error("invalid daily stop configuration", "error", err)
+			os.Exit(1)
+		}
+		dailyStopCtx, cancelDailyStop := context.WithCancel(context.Background())
+		defer cancelDailyStop()
+		go runDailyStop(dailyStopCtx, controller, logger, hour, minute, location)
+	}
+
 	h := handlers.New(cfg, controller, logger, webFS)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)

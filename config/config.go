@@ -14,6 +14,11 @@ type Speaker struct {
 	IP   string `yaml:"ip" json:"ip"`
 }
 
+type DailyStop struct {
+	Time     string `yaml:"time"`
+	Timezone string `yaml:"timezone"`
+}
+
 type Config struct {
 	Speakers   []Speaker `yaml:"speakers"`
 	AudioFile  string    `yaml:"audio_file"`
@@ -23,7 +28,8 @@ type Config struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"auth"`
-	SecretPath string `yaml:"secret_path"`
+	SecretPath string    `yaml:"secret_path"`
+	DailyStop  DailyStop `yaml:"daily_stop"`
 }
 
 func Load(path string) (*Config, error) {
@@ -75,6 +81,10 @@ func (c *Config) validate() error {
 			return fmt.Errorf("generating secret path: %w", err)
 		}
 		c.SecretPath = hex.EncodeToString(b)
+	}
+
+	if c.DailyStop.Time != "" && c.DailyStop.Timezone == "" {
+		c.DailyStop.Timezone = "Europe/Stockholm"
 	}
 
 	return nil

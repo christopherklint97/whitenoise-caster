@@ -55,6 +55,7 @@ See `config.example.yaml` for all options:
 - **listen_addr** — HTTP listen address (default `:8080`)
 - **auth** — optional basic auth for the web UI
 - **secret_path** — secret URL segment for the audio endpoint (auto-generated if empty)
+- **daily_stop** — optional local wall-clock daily stop; `Europe/Stockholm` keeps 06:30 stable across CET/CEST daylight-saving changes
 
 ## Deployment
 
