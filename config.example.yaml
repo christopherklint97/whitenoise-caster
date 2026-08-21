@@ -25,7 +25,7 @@ auth:
 # Secret path segment for the audio URL (auto-generated if empty)
 secret_path: ""
 
-# Optional wall-clock daily stop. Uses an IANA timezone so it remains 06:30
+# Optional wall-clock daily stop. Uses an IANA timezone so it remains 06:00
 # in Sweden as CET/CEST changes. Leave time empty to disable.
 daily_stop:
   time: ""

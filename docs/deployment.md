@@ -184,15 +184,15 @@ make deploy-prod
 
 ### Daily stop
 
-To silence any active cast at 06:30 every Swedish morning, add this to `config.prod.yaml` and redeploy:
+To silence any active cast at 06:00 every Swedish morning, add this to `config.prod.yaml` and redeploy:
 
 ```yaml
 daily_stop:
-  time: "06:30"
+  time: "06:00"
   timezone: "Europe/Stockholm"
 ```
 
-This runs inside the service rather than using a fixed UTC cron expression, so it stays at **06:30 Swedish local time** when Sweden moves between CET and CEST. Leave `time` empty or omit `daily_stop` to disable it.
+This runs inside the service rather than using a fixed UTC cron expression, so it stays at **06:00 Swedish local time** when Sweden moves between CET and CEST. Leave `time` empty or omit `daily_stop` to disable it.
 
 ### Restarting
 
