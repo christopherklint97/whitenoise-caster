@@ -1,5 +1,15 @@
 services:
   app:
+    # Host capacity guardrails (16 September 2026 incident).
+    cpus: "1.0"
+    mem_limit: 256m
+    memswap_limit: 384m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     build: .
     restart: unless-stopped
     ports:
