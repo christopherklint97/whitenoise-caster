@@ -14,6 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -47,3 +48,8 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
+          # Layer cache in GHCR, all stages (mode=max). Pushes to main write it; PRs only read.
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: >-
+            ${{ github.event_name == 'push' &&
+            format('type=registry,ref=ghcr.io/{0}:buildcache,mode=max', github.repository) || '' }}
